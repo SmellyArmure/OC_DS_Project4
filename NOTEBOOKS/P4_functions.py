@@ -388,13 +388,24 @@ def scree_plot(col_names, exp_var_rat, ylim=(0,0.4)):
 
 # Returing main regressor scores
 
-def scores(name, Xte, yte, ypr):
+def scores_reg(name, yte, ypr):
     MAE = metrics.mean_absolute_error(yte, ypr)
     MSE = metrics.mean_squared_error(yte, ypr)
     RMSE = np.sqrt(MSE)
-    RMSLE = np.sqrt(np.mean((np.log(ypr+1) - np.log(yte+1))**2))
     R2 = metrics.r2_score(yte, ypr)
-    return pd.Series([MAE, MSE, RMSE, RMSLE, R2],
-                     index = ['MAE', 'MSE', 'RMSE', 'RMSLE', 'R2'],
+    return pd.Series([MAE, MSE, RMSE, R2],
+                     index = ['MAE', 'MSE', 'RMSE', 'R2'],
                      name=name)
 
+# Returing mean regressor scores with cross-validation
+
+from sklearn.model_selection import cross_val_score
+
+def cv_scores_reg(name, pipe, X, y):
+    MAE = -cross_val_score(pipe,  X, y, cv=5, scoring='neg_mean_absolute_error').mean()
+    MSE = -cross_val_score(pipe,  X, y, cv=5, scoring='neg_mean_squared_error').mean()
+    RMSE = -cross_val_score(pipe,  X, y, cv=5, scoring='neg_root_mean_squared_error').mean()
+    R2 = cross_val_score(pipe, X, y, cv=5, scoring='r2').mean()
+    return pd.Series([MAE, MSE, RMSE, R2],
+                     index = ['cv_MAE', 'cv_MSE', 'cv_RMSE', 'cv_R2'],
+                     name=name)
