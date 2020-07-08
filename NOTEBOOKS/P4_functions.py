@@ -388,24 +388,36 @@ def scree_plot(col_names, exp_var_rat, ylim=(0,0.4)):
 
 # Returing main regressor scores
 
-def scores_reg(name, yte, ypr):
+def scores_reg(name, Xte, yte, ypr):
     MAE = metrics.mean_absolute_error(yte, ypr)
     MSE = metrics.mean_squared_error(yte, ypr)
     RMSE = np.sqrt(MSE)
     R2 = metrics.r2_score(yte, ypr)
-    return pd.Series([MAE, MSE, RMSE, R2],
-                     index = ['MAE', 'MSE', 'RMSE', 'R2'],
+    n = yte.shape[0] # nb of observations
+    p = Xte.shape[1] # nb of indep features
+    Adj_R2 = 1-(1-R2)*(n-1)/(n-p-1)
+    return pd.Series([MAE, MSE, RMSE, R2, Adj_R2],
+                     index = ['MAE', 'MSE', 'RMSE', 'R2', 'Adj_R2'],
                      name=name)
 
 # Returing mean regressor scores with cross-validation
 
 from sklearn.model_selection import cross_val_score
 
-def cv_scores_reg(name, pipe, X, y):
-    MAE = -cross_val_score(pipe,  X, y, cv=5, scoring='neg_mean_absolute_error').mean()
-    MSE = -cross_val_score(pipe,  X, y, cv=5, scoring='neg_mean_squared_error').mean()
-    RMSE = -cross_val_score(pipe,  X, y, cv=5, scoring='neg_root_mean_squared_error').mean()
-    R2 = cross_val_score(pipe, X, y, cv=5, scoring='r2').mean()
-    return pd.Series([MAE, MSE, RMSE, R2],
-                     index = ['cv_MAE', 'cv_MSE', 'cv_RMSE', 'cv_R2'],
-                     name=name)
+def cv_scores_reg(name, pipe, X, y, cv=5):
+
+    MAE = -cross_val_score(pipe,  X, y,
+                           cv=cv, scoring='neg_mean_absolute_error').mean()
+    MSE = -cross_val_score(pipe,  X, y, cv=cv, scoring='neg_mean_squared_error').mean()
+    RMSE = -cross_val_score(pipe,  X, y,
+                            cv=cv, scoring='neg_root_mean_squared_error').mean()
+    R2 = cross_val_score(pipe, X, y, cv=cv, scoring='r2').mean()
+
+    n = X.shape[0]/cv # nb of observations in the test 
+    p = X.shape[1] # nb of indep features
+    cvs = cross_val_score(pipe, X_te_sel, y1_te, cv=cv, scoring='r2')
+    Adj_R2 =(1-(1-cvs)*(n-1)/(n-p-1)).mean()
+
+    return pd.Series([MAE, MSE, RMSE, R2, Adj_R2],
+                     index = ['cv_MAE', 'cv_MSE', 'cv_RMSE',
+                              'cv_R2', 'cv_adj_R2'], name=name)
