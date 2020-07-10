@@ -389,35 +389,144 @@ def scree_plot(col_names, exp_var_rat, ylim=(0,0.4)):
 # Returing main regressor scores
 
 def scores_reg(name, Xte, yte, ypr):
-    MAE = metrics.mean_absolute_error(yte, ypr)
+    # MAE = metrics.mean_absolute_error(yte, ypr)
     MSE = metrics.mean_squared_error(yte, ypr)
     RMSE = np.sqrt(MSE)
     R2 = metrics.r2_score(yte, ypr)
     n = yte.shape[0] # nb of observations
     p = Xte.shape[1] # nb of indep features
     Adj_R2 = 1-(1-R2)*(n-1)/(n-p-1)
-    return pd.Series([MAE, MSE, RMSE, R2, Adj_R2],
-                     index = ['MAE', 'MSE', 'RMSE', 'R2', 'Adj_R2'],
+    return pd.Series([RMSE, R2, Adj_R2],
+                     index = ['RMSE', 'R2', 'Adj_R2'],
                      name=name)
 
-# Returing mean regressor scores with cross-validation
+# Computing the Adjusted R2 score
 
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_validate
+
+def calc_adj_R2(R2, n, p):
+    # n = yte.shape[0] # n: nb of observations
+    # p = Xte.shape[1] # p: nb of indep features
+    return 1-(1-R2)*(n-1)/(n-p-1)
+
+# Returning mean regressor scores with cross-validation
 
 def cv_scores_reg(name, pipe, X, y, cv=5):
+    res = pd.Series()
+    cv_scoring = ['neg_root_mean_squared_error', 'r2']
 
-    MAE = -cross_val_score(pipe,  X, y,
-                           cv=cv, scoring='neg_mean_absolute_error').mean()
-    MSE = -cross_val_score(pipe,  X, y, cv=cv, scoring='neg_mean_squared_error').mean()
-    RMSE = -cross_val_score(pipe,  X, y,
-                            cv=cv, scoring='neg_root_mean_squared_error').mean()
-    R2 = cross_val_score(pipe, X, y, cv=cv, scoring='r2').mean()
+    cv_scores = cross_validate(pipe, X, y, scoring=cv_scoring,
+                            cv=cv, return_train_score=True, verbose=1)
+    
+    res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'].mean(),
+                     'mean_CV_te_R2': cv_scores['test_r2'].mean(),
+                     'mean_CV_te_adjR2': calc_adj_R2(cv_scores['test_r2'],
+                                            y.shape[0]/5, X.shape[1]).mean()},
+                    name = name)
+    res2 = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'],
+                     'mean_CV_te_R2': cv_scores['test_r2'],
+                     'mean_CV_te_adjR2': calc_adj_R2(cv_scores['test_r2'],
+                                            y.shape[0]/cv, X.shape[1])},
+                    name = name)
+    return res
 
-    n = X.shape[0]/cv # nb of observations in the test 
-    p = X.shape[1] # nb of indep features
-    cvs = cross_val_score(pipe, X_te_sel, y1_te, cv=cv, scoring='r2')
-    Adj_R2 =(1-(1-cvs)*(n-1)/(n-p-1)).mean()
+## computes the test score from fitted model and appends to current dataframe or create a new one
 
-    return pd.Series([MAE, MSE, RMSE, R2, Adj_R2],
-                     index = ['cv_MAE', 'cv_MSE', 'cv_RMSE',
-                              'cv_R2', 'cv_adj_R2'], name=name)
+def get_append_scores(name_reg, pipe, Xte, yte, df_res=None, cv=6):
+    if df_res is None:
+        df_res = pd.DataFrame(dtype = 'object')
+    df_res_mod = pd.DataFrame(dtype = 'object')
+    ypr = pipe.predict(Xte)
+    ser = scores_reg(name_reg, Xte, yte, ypr).astype('object')
+    ser = ser.append(cv_scores_reg(name_reg, pipe, Xte, yte, cv=cv).astype('object'))
+    df_res_mod = pd.concat([df_res,ser.to_frame()],1)
+    return df_res_mod
+
+''' create a pipeline with datapreprocessing column transformer and regressor
+    then searches for best hyperparameters with gscv
+    then stores best parameters
+    then computes the scores of the model on testing set
+    then computes the cv scores of the model on testing set'''
+
+from sklearn.pipeline import make_pipeline
+
+def model_optimizer(name_reg, data_preproc, reg, param_grid,
+                    Xtr, ytr, Xte, yte, cv_gs=5, cv_test=5):
+
+    param_grid_pipe = {str(reg)[:-2].lower()+'__'+k : v \
+                for k,v in param_grid.items()}
+    pipe = make_pipeline(data_preproc, reg)
+
+    # researching best hyperparameters and fitting on training set
+    gscv = GridSearchCV(pipe,
+                        param_grid=param_grid_pipe,
+                        cv=cv_gs, verbose=1)
+    gscv.fit(Xtr,ytr)
+
+    # best hyperparams
+    df_res = pd.DataFrame(dtype = 'object')
+    df_res.at['name_params', name_reg] =\
+                    str(list(param_grid.keys()))
+    df_res.at['best_params', name_reg] =\
+                    str([gscv.best_params_[p] for p in param_grid_pipe])
+
+    # score of the model with best params on testing set
+    ypr = gscv.predict(Xte)
+    res = scores_reg(name_reg, Xte, yte, ypr).astype('object')
+    df_res = df_res.append(res.to_frame())
+
+    # mean cv score of the model with best params on testing set
+    res = cv_scores_reg(name_reg, gscv.best_estimator_,
+                        Xte, yte, cv=cv_test).astype('object')
+    df_res = df_res.append(res.to_frame())
+
+    return gscv, df_res
+
+## When searching for 2 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
+
+def plot_2D_hyperparam_opt(gscv):
+    gscv_res = gscv.cv_results_
+    df_gscv = pd.DataFrame(gscv_res)
+    list_n_params = df_gscv.columns[df_gscv.columns.str.contains('param_')].to_list()
+    max_scores = df_gscv.groupby(list_n_params).max()
+    sns.heatmap(max_scores.unstack()['mean_test_score'], annot=True, fmt='.4g');
+
+## When searching for 1 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
+
+def plot_1D_hyperparam_opt(gscv, log_sc=False):
+	plt.rcParams['figure.facecolor']='w'
+    gscv_res = gscv.cv_results_
+    df_gscv = pd.DataFrame(gscv_res)
+    params = df_gscv.columns[df_gscv.columns.str.contains('param_')]
+    if len(params)!=1:
+        print('ERROR : there is more than one parameter, try smthg else')
+    else:
+        n_p = params[0]
+        li_p = gscv.cv_results_[n_p].tolist()
+        max_scores = df_gscv.groupby(n_p).max()
+        plt.errorbar(li_p, max_scores.unstack()['mean_test_score'], color='r',
+                    yerr=gscv_res['std_test_score'])
+        plt.gca().set_title(n_p)
+        if log_sc: plt.gca().set_xscale('log')
+
+''' Plotting the leraning curve of a model.
+Allow iterative addition of other curves on the same figure if passed in arguments'''
+
+from sklearn.model_selection import learning_curve
+
+def plot_learning_curve(model, X, y, train_sizes, label, c='r',
+                        scoring="r2", cv=5, fig=None):
+    if fig is None:
+        fig = plt.figure()
+        ax = fig.add_subplot()
+    ax = fig.axes[0]
+    train_sizes, train_scores,valid_scores = \
+                    learning_curve(model, X, y, train_sizes=train_sizes,
+                                   scoring=scoring, cv=cv)
+    scores = -valid_scores.mean(1) if scoring!='r2' else valid_scores.mean(1)
+    ax.plot(train_sizes, scores, 'o-', color=c, label=label)
+    ax.set_xlabel("Train size"), ax.set_ylabel("R2")
+    ax.set_title('Learning curves', fontweight='bold')
+    ax.legend(loc="best")
+    fig.set_facecolor('w')
+    return fig
