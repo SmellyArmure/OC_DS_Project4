@@ -442,15 +442,120 @@ def get_append_scores(name_reg, pipe, Xte, yte, df_res=None, cv=6):
     df_res_mod = pd.concat([df_res,ser.to_frame()],1)
     return df_res_mod
 
+''' Builds a customizable column_transformer which parameters can be optimized in a GridSearchCV
+CATEGORICAL : three differents startegies for 3 different types of
+categorical variables:
+- low cardinality: customizable strategy (strat_low_card)
+- high cardinality: customizable strategy (strat_high_card)
+- boolean or equivalent (2 categories): ordinal
+QUANTITATIVE (remainder): 
+- StandardScaler
+
+-> EXAMPLE (to use apart from gscv):
+cust_enc = CustEncoder(thresh_card=12,
+                       strat_binary = 'ord',
+                       strat_low_card = 'ohe',
+                       strat_high_card = 'loo',
+                       strat_quant = 'stand')
+cust_enc.fit(X_tr, y1_tr)
+cust_enc.transform(X_tr).shape, X_tr.shape
+
+'''
+
+from sklearn.base import BaseEstimator
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler
+import category_encoders as ce
+
+class CustEncoder(BaseEstimator) :
+
+    def __init__(self, thresh_card=12,
+                 strat_binary = 'ord', strat_low_card ='ohe',
+                 strat_high_card ='hash', strat_quant = 'stand'):
+        self.thresh_card = thresh_card
+        self.strat_binary = strat_binary
+        self.strat_low_card = strat_low_card
+        self.strat_high_card = strat_high_card
+        self.strat_quant = strat_quant
+
+    def d_type_col(self, X):
+        bin_cols = (X.nunique()[X.nunique()==2].index)
+        X_C_cols = X.select_dtypes(include=['object', 'category'])
+        C_l_card_cols = X_C_cols.nunique()[X_C_cols.nunique()<self.thresh_card].index
+        C_h_card_cols = X_C_cols.nunique()[X_C_cols.nunique()>=self.thresh_card].index
+        Q_cols = [c for c in X.select_dtypes(include=[np.number]).columns\
+                                                        if c not in bin_cols]
+        d_t = {'binary': bin_cols,
+               'low_card': C_l_card_cols,
+               'high_card': C_h_card_cols,
+               'remaind': Q_cols}
+        return d_t
+
+    def fit(self, X, y=None):
+        # Dictionary to translate strategies
+        d_enc = {'ohe': ce.OneHotEncoder(),
+                 'hash': ce.HashingEncoder(),
+                 'ord': ce.OrdinalEncoder(),
+                 'loo': ce.LeaveOneOutEncoder(),
+                 'bin': ce.BinaryEncoder(),
+                 'stand': StandardScaler()}
+        # Creates a columns transformer with chosen strategies
+        self.column_trans = \
+                ColumnTransformer([("binary", d_enc[self.strat_binary],
+                                    self.d_type_col(X)['binary']),
+                                   ("low_card", d_enc[self.strat_low_card],
+                                    self.d_type_col(X)['low_card']),
+                                   ("high_card", d_enc[self.strat_high_card],
+                                    self.d_type_col(X)['high_card']),
+                                   ("remaind", d_enc[self.strat_quant],
+                                    self.d_type_col(X)['remaind'])])
+        return self.column_trans.fit(X, y)
+  
+    def transform(self, X, y=None):
+        return  self.column_trans.transform(X)
+
 ''' create a pipeline with datapreprocessing column transformer and regressor
     then searches for best hyperparameters with gscv
     then stores best parameters
     then computes the scores of the model on testing set
     then computes the cv scores of the model on testing set'''
 
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 
-def model_optimizer(name_reg, data_preproc, reg, param_grid,
+def best_model_optimizer(data_preproc, name_reg, reg, param_grid,
+                         Xtr, ytr, Xte, yte,
+                         cv_gs=5, groups=None, cv_test=6,
+                         gs_score='neg_root_mean_squared_error'):
+
+    pipe = Pipeline([('preproc', data_preproc),
+                    (name_reg, reg)])
+    
+    # researching best hyperparameters and fitting on training set
+    gscv = GridSearchCV(pipe, param_grid = param_grid,
+                        cv=5, scoring=gs_score, verbose=1)
+    gscv.fit(Xtr, ytr, groups=groups) # to stratify the folds using a GroupFolds
+
+    # best hyperparams
+    df_res = pd.DataFrame(dtype = 'object')
+    df_res.at['name_params', name_reg] =\
+                    str(list(param_grid.keys()))
+    df_res.at['best_params', name_reg] =\
+                    str([gscv.best_params_[p] for p in param_grid])
+
+    # score of the model with best params on testing set
+    ypr = gscv.predict(Xte)
+    res = scores_reg(name_reg, Xte, yte, ypr).astype('object')
+    df_res = df_res.append(res.to_frame())
+
+    # mean cv score of the model with best params on testing set
+    res = cv_scores_reg(name_reg, gscv.best_estimator_,
+                        Xte, yte, cv=cv_test).astype('object')
+    df_res = df_res.append(res.to_frame())
+
+    return gscv, df_res
+
+
+def model_optimizer(data_preproc, name_reg, reg,  param_grid,
                     Xtr, ytr, Xte, yte, cv_gs=5, cv_test=5):
 
     param_grid_pipe = {str(reg)[:-2].lower()+'__'+k : v \
@@ -494,7 +599,6 @@ def plot_2D_hyperparam_opt(gscv):
 ## When searching for 1 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
 
 def plot_1D_hyperparam_opt(gscv, log_sc=False):
-	plt.rcParams['figure.facecolor']='w'
     gscv_res = gscv.cv_results_
     df_gscv = pd.DataFrame(gscv_res)
     params = df_gscv.columns[df_gscv.columns.str.contains('param_')]
