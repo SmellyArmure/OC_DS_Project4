@@ -10,7 +10,7 @@ from sklearn.dummy import DummyRegressor, DummyClassifier
 from sklearn.feature_extraction import FeatureHasher
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
-from sklearn.model_selection import GridSearchCV, KFold, StratifiedKFold, train_test_split
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, KFold, StratifiedKFold, train_test_split
 from sklearn import metrics
 
 def move_cat_containing(my_index, strings, order):
@@ -388,18 +388,22 @@ def scree_plot(col_names, exp_var_rat, ylim=(0,0.4)):
 
 # Returing main regressor scores
 
-def scores_reg(name, Xte, yte, ypr):
+def scores_reg(name, Xte, yte, ypr, adj_r2=False):
     # MAE = metrics.mean_absolute_error(yte, ypr)
     MSE = metrics.mean_squared_error(yte, ypr)
     RMSE = np.sqrt(MSE)
     R2 = metrics.r2_score(yte, ypr)
     n = yte.shape[0] # nb of observations
     p = Xte.shape[1] # nb of indep features
-    Adj_R2 = 1-(1-R2)*(n-1)/(n-p-1)
-    return pd.Series([RMSE, R2, Adj_R2],
-                     index = ['RMSE', 'R2', 'Adj_R2'],
+    if adj_r2:
+        Adj_R2 = 1-(1-R2)*(n-1)/(n-p-1)
+        return pd.Series([RMSE, R2, Adj_R2],
+                        index = ['RMSE', 'R2', 'Adj_R2'],
+                        name=name)
+    else:
+        return pd.Series([RMSE, R2],
+                     index = ['RMSE', 'R2'],
                      name=name)
-
 # Computing the Adjusted R2 score
 
 from sklearn.model_selection import cross_validate
@@ -409,26 +413,27 @@ def calc_adj_R2(R2, n, p):
     # p = Xte.shape[1] # p: nb of indep features
     return 1-(1-R2)*(n-1)/(n-p-1)
 
+
 # Returning mean regressor scores with cross-validation
 
-def cv_scores_reg(name, pipe, X, y, cv=5):
+def cv_scores_reg(name, pipe, X, y, cv=5, adj_r2=False):
     res = pd.Series()
     cv_scoring = ['neg_root_mean_squared_error', 'r2']
 
-    cv_scores = cross_validate(pipe, X, y, scoring=cv_scoring,
-                            cv=cv, return_train_score=True, verbose=1)
-    
-    res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'].mean(),
-                     'mean_CV_te_R2': cv_scores['test_r2'].mean(),
-                     'mean_CV_te_adjR2': calc_adj_R2(cv_scores['test_r2'],
-                                            y.shape[0]/5, X.shape[1]).mean()},
-                    name = name)
-    res2 = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'],
-                     'mean_CV_te_R2': cv_scores['test_r2'],
-                     'mean_CV_te_adjR2': calc_adj_R2(cv_scores['test_r2'],
-                                            y.shape[0]/cv, X.shape[1])},
-                    name = name)
+    cv_scores = cross_validate(pipe, X, y, scoring=cv_scoring,                       
+                               cv=cv, return_train_score=True, verbose=1)
+    if adj_r2:
+        res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'].mean(),
+	                     'mean_CV_te_R2': cv_scores['test_r2'].mean(),
+	                     'mean_CV_te_adjR2': calc_adj_R2(cv_scores['test_r2'],
+                                                      y.shape[0]/5,
+                                                      X.shape[1]).mean()},
+                        name = name)
+    else:
+	    res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'],
+	                     'mean_CV_te_R2': cv_scores['test_r2']}, name = name)
     return res
+
 
 ## computes the test score from fitted model and appends to current dataframe or create a new one
 
@@ -452,7 +457,7 @@ QUANTITATIVE (remainder):
 - StandardScaler
 
 -> EXAMPLE (to use apart from gscv):
-cust_enc = CustEncoder(thresh_card=12,
+cust_enc = CustTransformer(thresh_card=12,
                        strat_binary = 'ord',
                        strat_low_card = 'ohe',
                        strat_high_card = 'loo',
@@ -464,10 +469,10 @@ cust_enc.transform(X_tr).shape, X_tr.shape
 
 from sklearn.base import BaseEstimator
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler
 import category_encoders as ce
+from sklearn.preprocessing import *
 
-class CustEncoder(BaseEstimator) :
+class CustTransformer(BaseEstimator) :
 
     def __init__(self, thresh_card=12,
                  strat_binary = 'ord', strat_low_card ='ohe',
@@ -498,7 +503,15 @@ class CustEncoder(BaseEstimator) :
                  'ord': ce.OrdinalEncoder(),
                  'loo': ce.LeaveOneOutEncoder(),
                  'bin': ce.BinaryEncoder(),
-                 'stand': StandardScaler()}
+                 'stand': StandardScaler(),
+                 'minmax': MinMaxScaler(),
+                 'maxabs': MaxAbsScaler(),
+                 'robust': RobustScaler(quantile_range=(25, 75)),
+                 'norm': Normalizer(),
+                 'quant_uni': QuantileTransformer(output_distribution='uniform'),
+                 'quant_norm': QuantileTransformer(output_distribution='normal'),
+                 'pow': PowerTransformer(method='yeo-johnson'), # 'boxcox'
+                 }
         # Creates a columns transformer with chosen strategies
         self.column_trans = \
                 ColumnTransformer([("binary", d_enc[self.strat_binary],
@@ -513,7 +526,6 @@ class CustEncoder(BaseEstimator) :
   
     def transform(self, X, y=None):
         return  self.column_trans.transform(X)
-
 ''' create a pipeline with datapreprocessing column transformer and regressor
     then searches for best hyperparameters with gscv
     then stores best parameters
@@ -521,97 +533,124 @@ class CustEncoder(BaseEstimator) :
     then computes the cv scores of the model on testing set'''
 
 from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.model_selection import RandomizedSearchCV
 
-def best_model_optimizer(data_preproc, name_reg, reg, param_grid,
-                         Xtr, ytr, Xte, yte,
-                         cv_gs=5, groups=None, cv_test=6,
-                         gs_score='neg_root_mean_squared_error'):
+def model_optimizer(data_preproc, name_reg, reg, param_grid,
+                    Xtr, ytr, Xte, yte,
+                    cv_search=5, groups=None, cv_test=6,
+                    gs_score='neg_root_mean_squared_error',
+                    search_strat='grid', n_iter=10):
 
     pipe = Pipeline([('preproc', data_preproc),
                     (name_reg, reg)])
     
     # researching best hyperparameters and fitting on training set
-    gscv = GridSearchCV(pipe, param_grid = param_grid,
-                        cv=5, scoring=gs_score, verbose=1)
-    gscv.fit(Xtr, ytr, groups=groups) # to stratify the folds using a GroupFolds
+    if search_strat=='grid':
+        scv = GridSearchCV(pipe, param_grid = param_grid,
+                           cv=cv_search, scoring=gs_score, verbose=1)
+        print("grid")
+    elif search_strat=='rand':
+        scv = RandomizedSearchCV(pipe, param_distributions = param_grid,
+                            cv=cv_search, n_iter= n_iter,
+                            scoring=gs_score, verbose=1)
+        print("randomized")
+    else:
+        print("ERROR: This strategy of hyperparameter tuning does not exist.")
+    scv.fit(Xtr, ytr, groups=groups) # to stratify the folds using a GroupFolds
 
     # best hyperparams
     df_res = pd.DataFrame(dtype = 'object')
     df_res.at['name_params', name_reg] =\
                     str(list(param_grid.keys()))
     df_res.at['best_params', name_reg] =\
-                    str([gscv.best_params_[p] for p in param_grid])
+                    str([scv.best_params_[p] for p in param_grid])
 
     # score of the model with best params on testing set
-    ypr = gscv.predict(Xte)
+    ypr = scv.predict(Xte)
     res = scores_reg(name_reg, Xte, yte, ypr).astype('object')
     df_res = df_res.append(res.to_frame())
 
     # mean cv score of the model with best params on testing set
-    res = cv_scores_reg(name_reg, gscv.best_estimator_,
+    res = cv_scores_reg(name_reg, scv.best_estimator_,
                         Xte, yte, cv=cv_test).astype('object')
     df_res = df_res.append(res.to_frame())
 
-    return gscv, df_res
+    return scv, df_res
 
+# def model_optimizer(data_preproc, name_reg, reg,  param_grid,
+#                     Xtr, ytr, Xte, yte, cv_gs=5, cv_test=5):
 
-def model_optimizer(data_preproc, name_reg, reg,  param_grid,
-                    Xtr, ytr, Xte, yte, cv_gs=5, cv_test=5):
+#     param_grid_pipe = {str(reg)[:-2].lower()+'__'+k : v \
+#                 for k,v in param_grid.items()}
+#     pipe = make_pipeline(data_preproc, reg)
 
-    param_grid_pipe = {str(reg)[:-2].lower()+'__'+k : v \
-                for k,v in param_grid.items()}
-    pipe = make_pipeline(data_preproc, reg)
+#     # researching best hyperparameters and fitting on training set
+#     gscv = GridSearchCV(pipe,
+#                         param_grid=param_grid_pipe,
+#                         cv=cv_gs, verbose=1)
+#     gscv.fit(Xtr,ytr)
 
-    # researching best hyperparameters and fitting on training set
-    gscv = GridSearchCV(pipe,
-                        param_grid=param_grid_pipe,
-                        cv=cv_gs, verbose=1)
-    gscv.fit(Xtr,ytr)
+#     # best hyperparams
+#     df_res = pd.DataFrame(dtype = 'object')
+#     df_res.at['name_params', name_reg] =\
+#                     str(list(param_grid.keys()))
+#     df_res.at['best_params', name_reg] =\
+#                     str([gscv.best_params_[p] for p in param_grid_pipe])
 
-    # best hyperparams
-    df_res = pd.DataFrame(dtype = 'object')
-    df_res.at['name_params', name_reg] =\
-                    str(list(param_grid.keys()))
-    df_res.at['best_params', name_reg] =\
-                    str([gscv.best_params_[p] for p in param_grid_pipe])
+#     # score of the model with best params on testing set
+#     ypr = gscv.predict(Xte)
+#     res = scores_reg(name_reg, Xte, yte, ypr).astype('object')
+#     df_res = df_res.append(res.to_frame())
 
-    # score of the model with best params on testing set
-    ypr = gscv.predict(Xte)
-    res = scores_reg(name_reg, Xte, yte, ypr).astype('object')
-    df_res = df_res.append(res.to_frame())
+#     # mean cv score of the model with best params on testing set
+#     res = cv_scores_reg(name_reg, gscv.best_estimator_,
+#                         Xte, yte, cv=cv_test).astype('object')
+#     df_res = df_res.append(res.to_frame())
 
-    # mean cv score of the model with best params on testing set
-    res = cv_scores_reg(name_reg, gscv.best_estimator_,
-                        Xte, yte, cv=cv_test).astype('object')
-    df_res = df_res.append(res.to_frame())
-
-    return gscv, df_res
+#     return gscv, df_res
 
 ## When searching for 2 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
 
-def plot_2D_hyperparam_opt(gscv):
+def plot_2D_hyperparam_opt(gscv, params=None):
     gscv_res = gscv.cv_results_
     df_gscv = pd.DataFrame(gscv_res)
-    list_n_params = df_gscv.columns[df_gscv.columns.str.contains('param_')].to_list()
-    max_scores = df_gscv.groupby(list_n_params).max()
+    if params:
+        params_gscv = ['param_'+p for p in params]  # example: params=['my_ElasticNet__alpha', 'my_ElasticNet__l1_ratio']
+    else:
+        params_gscv = df_gscv.columns[df_gscv.columns.str.contains('param_')].to_list()
+        if len(params_gscv)!=2:
+            print('ERROR : please provide exactly two parameters to display')
+            return None
+            # params_gscv = params_gscv[0:2]
+        else:
+            params_gscv = params_gscv
+    max_scores = df_gscv.groupby(params_gscv).max()
     sns.heatmap(max_scores.unstack()['mean_test_score'], annot=True, fmt='.4g');
 
 ## When searching for 1 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
 
-def plot_1D_hyperparam_opt(gscv, log_sc=False):
+def plot_1D_hyperparam_opt(gscv, log_sc=False, param=None):
+   
     gscv_res = gscv.cv_results_
     df_gscv = pd.DataFrame(gscv_res)
-    params = df_gscv.columns[df_gscv.columns.str.contains('param_')]
-    if len(params)!=1:
-        print('ERROR : there is more than one parameter, try smthg else')
+    if param:
+        param_gscv = 'param_'+param  # example: param='KNN__n_neighbors'
     else:
-        n_p = params[0]
-        li_p = gscv.cv_results_[n_p].tolist()
-        max_scores = df_gscv.groupby(n_p).max()
-        plt.errorbar(li_p, max_scores.unstack()['mean_test_score'], color='r',
-                    yerr=gscv_res['std_test_score'])
-        plt.gca().set_title(n_p)
-        if log_sc: plt.gca().set_xscale('log')
+        param_gscv = df_gscv.columns[df_gscv.columns.str.contains('param_')]
+        if len(param_gscv)!=1:
+            print('ERROR : there is more than one parameter, try smthg else')
+            return None
+        else:
+            param_gscv = param_gscv[0]
+    
+    li_p = gscv.cv_results_[param_gscv].tolist()
+    max_scores = df_gscv.groupby(param_gscv).max()
+    plt.errorbar(li_p, max_scores.unstack()['mean_test_score'], color='r',
+                yerr=gscv_res['std_test_score'])
+    plt.gca().set_title(param_gscv)
+    if log_sc: plt.gca().set_xscale('log')
+    plt.gcf().set_facecolor('w')
+
 
 ''' Plotting the leraning curve of a model.
 Allow iterative addition of other curves on the same figure if passed in arguments'''
@@ -634,3 +673,46 @@ def plot_learning_curve(model, X, y, train_sizes, label, c='r',
     ax.legend(loc="best")
     fig.set_facecolor('w')
     return fig
+
+
+'''calculates VIF and exclude colinear columns'''
+
+from statsmodels.stats.outliers_influence import variance_inflation_factor    
+
+def select_from_vif_(X, thresh=5.0):
+    variables = list(range(X.shape[1]))
+    dropped = True
+    while dropped:
+        dropped = False
+        vif = [variance_inflation_factor(X.iloc[:, variables].values, ix)
+               for ix in range(X.iloc[:, variables].shape[1])]
+
+        maxloc = vif.index(max(vif))
+        if max(vif) > thresh:
+            print('dropping \'' + str(X.iloc[:, variables].columns[maxloc]) +
+                  '\' at index: ' + str(maxloc))
+            del variables[maxloc]
+            dropped = True
+
+    print('Remaining variables:')
+    print(X.columns[variables])
+    return X.iloc[:, variables]
+
+def select_from_vif_debugged_(X, thresh=100):
+	cols = X.columns
+	variables = np.arange(X.shape[1])
+	dropped=True
+	while dropped:
+	    dropped=False
+	    c = X[cols[variables]].values
+	    vif = [variance_inflation_factor(c, ix) for ix in np.arange(c.shape[1])]
+
+	    maxloc = vif.index(max(vif))
+	    if max(vif) > thresh:
+	        print('dropping \'' + X[cols[variables]].columns[maxloc] + '\' at index: ' + str(maxloc))
+	        variables = np.delete(variables, maxloc)
+	        dropped=True
+
+	print('Remaining variables:')
+	print(X.columns[variables])
+	return X[cols[variables]]
