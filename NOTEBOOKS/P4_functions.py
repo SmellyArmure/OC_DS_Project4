@@ -387,34 +387,44 @@ def scree_plot(col_names, exp_var_rat, ylim=(0,0.4)):
 
 
 # Returing main regressor scores
+#MAE, MSE, RMSE, R2, expl_var, Adj_R2, MAPE, MSPE
 
-def scores_reg(name, Xte, yte, ypr, adj_r2=False):
-    # MAE = metrics.mean_absolute_error(yte, ypr)
-    MSE = metrics.mean_squared_error(yte, ypr)
+def scores_reg(name, X, y, ypr, exclude=['Adj_R2']):
+
+    MAE = metrics.mean_absolute_error(y, ypr)
+    MSE = metrics.mean_squared_error(y, ypr)
     RMSE = np.sqrt(MSE)
-    R2 = metrics.r2_score(yte, ypr)
-    n = yte.shape[0] # nb of observations
-    p = Xte.shape[1] # nb of indep features
-    if adj_r2:
-        Adj_R2 = 1-(1-R2)*(n-1)/(n-p-1)
-        return pd.Series([RMSE, R2, Adj_R2],
-                        index = ['RMSE', 'R2', 'Adj_R2'],
-                        name=name)
-    else:
-        return pd.Series([RMSE, R2],
-                     index = ['RMSE', 'R2'],
-                     name=name)
+    R2 = metrics.r2_score(y, ypr)
+    n = y.shape[0] # nb of observations
+    p = X.shape[1] # nb of indep features
+    Adj_R2 = 1-(1-R2)*(n-1)/(n-p-1)
+    MAPE = 100*np.mean(np.abs((y-ypr)/(y+1e-10)))
+    MSPE = 100*np.mean(np.square((y-ypr)/y+1e-10))
+    expl_var = metrics.explained_variance_score(y, ypr)
+
+    dict_metrics = {'MAE': MAE, 'MSE': MSE, 'RMSE': RMSE,
+                    'R2': R2, 'expl_var': expl_var, 'Adj_R2': Adj_R2,
+                    'MAPE': MAPE, 'MSPE': MSPE}
+    
+    li_n_metrics = [n for n in dict_metrics.keys() if n not in exclude]
+    li_metrics = [dict_metrics[n] for n in li_n_metrics]
+    ser = pd.Series(li_metrics, index = li_n_metrics, name=name)
+
+    return ser
+
 # Computing the Adjusted R2 score
 
 from sklearn.model_selection import cross_validate
 
-def calc_adj_R2(R2, n, p):
-    # n = yte.shape[0] # n: nb of observations
-    # p = Xte.shape[1] # p: nb of indep features
-    return 1-(1-R2)*(n-1)/(n-p-1)
+# def calc_adj_R2(R2, n, p):
+#     # n = yte.shape[0] # n: nb of observations
+#     # p = Xte.shape[1] # p: nb of indep features
+#     return 1-(1-R2)*(n-1)/(n-p-1)
 
 
 # Returning mean regressor scores with cross-validation
+### AMELIORER PEUT-ETRE POUR INCLURE DE MEILLEURES METRIQUES ?
+### FONCTION EXLCUDE ?
 
 def cv_scores_reg(name, pipe, X, y, cv=5, adj_r2=False):
     res = pd.Series()
@@ -422,15 +432,16 @@ def cv_scores_reg(name, pipe, X, y, cv=5, adj_r2=False):
 
     cv_scores = cross_validate(pipe, X, y, scoring=cv_scoring,                       
                                cv=cv, return_train_score=True, verbose=1)
+    n = y.shape[0]/cv # n: nb of observations
+    p = X.shape[1] # p: nb of indep features
+    Adj_R2 = (1-(1-cv_scores['test_r2'])*(n-1)/(n-p-1)).mean()
     if adj_r2:
         res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'].mean(),
 	                     'mean_CV_te_R2': cv_scores['test_r2'].mean(),
-	                     'mean_CV_te_adjR2': calc_adj_R2(cv_scores['test_r2'],
-                                                      y.shape[0]/5,
-                                                      X.shape[1]).mean()},
-                        name = name)
+	                     'mean_CV_te_adjR2': Adj_R2},
+                         name = name)
     else:
-	    res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'],
+        res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'],
 	                     'mean_CV_te_R2': cv_scores['test_r2']}, name = name)
     return res
 
@@ -567,7 +578,8 @@ def model_optimizer(data_preproc, name_reg, reg, param_grid,
 
     # score of the model with best params on testing set
     ypr = scv.predict(Xte)
-    res = scores_reg(name_reg, Xte, yte, ypr).astype('object')
+    res = scores_reg(name_reg, Xte, yte, ypr,
+    	             exclude=['Adj_R2']).astype('object')
     df_res = df_res.append(res.to_frame())
 
     # mean cv score of the model with best params on testing set
@@ -628,7 +640,7 @@ def plot_2D_hyperparam_opt(gscv, params=None):
     sns.heatmap(max_scores.unstack()['mean_test_score'], annot=True, fmt='.4g');
 
 ## When searching for 1 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
-
+#### A REPARER, ne marche plus quand on active return_train_score du gridsearch
 def plot_1D_hyperparam_opt(gscv, log_sc=False, param=None):
    
     gscv_res = gscv.cv_results_
@@ -674,6 +686,91 @@ def plot_learning_curve(model, X, y, train_sizes, label, c='r',
     fig.set_facecolor('w')
     return fig
 
+''' plots the training and test scores obtained during the SearchCV (either Randomized or Grid)
+In case you want to select only the influence of one optimized parameter, pass the a filtered 'result'
+variable, that can be obtained using the 'filters_cv_results' function'''
+
+def plot_scv_multi_scores(scv, param, results=None, name_reg=None,
+	title=None, figsize = (10, 4)):
+
+    if name_reg is None :
+        name_reg = scv.estimator.steps[1][0]
+    if title is None :
+    	title = "Multiple scores of SearchCV for '"+str(name_reg)+"'"
+    if results is None : results = scv.cv_results_
+
+    scoring = scv.scoring
+    fig, axs = plt.subplots(1,len(scoring))
+    fig.set_size_inches(figsize)
+    fig.suptitle(title, fontsize=16, fontweight='bold')
+    
+    li_colors = ['b', 'r', 'g', 'purple', 'orange', 'pink']
+    if type(axs) is not list: axs = [axs]
+
+    # Get the regular np array from the MaskedArray
+    X_axis = np.array(results[param].data, dtype=float)
+
+    for scorer, color, ax in zip(sorted(scoring), li_colors[:len(scoring)], axs):
+        for sample, style in (('train', '--'), ('test', '-')):
+            sample_score_mean = results['mean_%s_%s' % (sample, scorer)]
+            sample_score_std = results['std_%s_%s' % (sample, scorer)]
+            ax.fill_between(X_axis, sample_score_mean - sample_score_std,
+                            sample_score_mean + sample_score_std,
+                            alpha=0.2 if sample == 'test' else 0.1, color=color)
+            ax.plot(X_axis, sample_score_mean, style, marker='o', markersize=3,
+            	color=color, alpha=1 if sample == 'test' else 0.7,
+                    label="%s (%s)" % (scorer, sample))
+            
+        y_min, y_max = ax.get_ylim()
+        # Plot a dotted vertical line at the best score for that scorer marked by x
+        best_index = np.nonzero(results['rank_test_%s' % scorer] == 1)[0][0]
+        best_score = results['mean_test_%s' % scorer][best_index]
+        ax.plot([X_axis[best_index], ] * 2, [y_min - abs(y_min)*0.1,
+                                             best_score], # 
+            linestyle='-.', color=color, marker='x', markeredgewidth=3, ms=8)
+        ax.set_ylim(y_min, y_max)
+        ax.set_xlabel(param)
+        ax.set_ylabel("Score")
+        ax.legend(loc="best")
+
+        # Annotate the best score for that scorer
+        ax.annotate("%0.2f" % best_score, 
+                    (X_axis[best_index]*1.05, best_score*1+abs(best_score)*.1))
+        
+    plt.tight_layout(rect=(0.05,0,0.95,0.95))
+
+
+''' Takes a gridsearch or randomizedsearch and one parameter
+and isolate the influence of this parameter on all the scores
+available in the scv -> dictionary of the best other fixed parameters 
+and a dataframe of the scores depending on the chosen parameter and a 
+filtered cv_results_ dataframe that can be used in the 'plot_scv_multi_scores' function '''
+
+def filters_cv_results(gscv, param):
+
+    gscv_res = gscv.cv_results_
+    df_gscv = pd.DataFrame(gscv_res)
+    param_gscv = 'param_'+param  # example: param='KNN__n_neighbors'
+
+    # selects in the data frame the best params except for 'param' (les afficher en titre ??)
+    all_params = df_gscv.columns[df_gscv.columns.str.startswith('param_')]
+    all_params_sh = [p[6:] for p in all_params]
+    best_params = gscv.best_params_.copy()
+    del best_params[param]
+
+    # filters in the result dataframe only optimized results except for 'param'
+    mask = np.full((df_gscv.shape[0],), True)
+    for k,v in best_params.items():
+        mask = mask & (df_gscv['param_'+k]==v)
+
+    df_gscv_filt = df_gscv.loc[mask]
+
+    li_p = df_gscv_filt[param_gscv].tolist()
+
+    scores = df_gscv_filt.columns[df_gscv_filt.columns.str.startswith('mean_')]
+    df_sel_scores = df_gscv_filt[['param_'+param]+list(scores)].set_index('param_'+param)
+
+    return best_params, df_sel_scores, df_gscv_filt
 
 '''calculates VIF and exclude colinear columns'''
 
