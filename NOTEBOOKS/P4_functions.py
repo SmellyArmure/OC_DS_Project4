@@ -13,7 +13,7 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, KFold, StratifiedKFold, train_test_split
 from sklearn import metrics
 
-def move_cat_containing(my_index, strings, order):
+def move_cat_containing(my_index, strings, order='last'):
   idx_sel = []
   if order == 'last':
     index = my_index
@@ -495,17 +495,21 @@ class CustTransformer(BaseEstimator) :
         self.strat_quant = strat_quant
 
     def d_type_col(self, X):
-        bin_cols = (X.nunique()[X.nunique()==2].index)
+        bin_cols = (X.nunique()[X.nunique()<=2].index)
         X_C_cols = X.select_dtypes(include=['object', 'category'])
-        C_l_card_cols = X_C_cols.nunique()[X_C_cols.nunique()<self.thresh_card].index
-        C_h_card_cols = X_C_cols.nunique()[X_C_cols.nunique()>=self.thresh_card].index
+        C_l_card_cols = X_C_cols.nunique()[X_C_cols.nunique().between(3, self.thresh_card)].index
+        C_h_card_cols = X_C_cols.nunique()[X_C_cols.nunique()>self.thresh_card].index
         Q_cols = [c for c in X.select_dtypes(include=[np.number]).columns\
                                                         if c not in bin_cols]
         d_t = {'binary': bin_cols,
                'low_card': C_l_card_cols,
                'high_card': C_h_card_cols,
-               'remaind': Q_cols}
+               'numeric': Q_cols}
         return d_t
+
+    def get_feature_names(self, X):
+        self.ct_cat.fit(X)
+        return self.ct_cat.get_feature_names()
 
     def fit(self, X, y=None):
         # Dictionary to translate strategies
@@ -523,103 +527,141 @@ class CustTransformer(BaseEstimator) :
                  'quant_norm': QuantileTransformer(output_distribution='normal'),
                  'pow': PowerTransformer(method='yeo-johnson'), # 'boxcox'
                  }
-        # Creates a columns transformer with chosen strategies
-        self.column_trans = \
-                ColumnTransformer([("binary", d_enc[self.strat_binary],
-                                    self.d_type_col(X)['binary']),
-                                   ("low_card", d_enc[self.strat_low_card],
-                                    self.d_type_col(X)['low_card']),
-                                   ("high_card", d_enc[self.strat_high_card],
-                                    self.d_type_col(X)['high_card']),
-                                   ("remaind", d_enc[self.strat_quant],
-                                    self.d_type_col(X)['remaind'])])
+
+        self.ct_cat =  ColumnTransformer([
+                                        ('binary', ce.OrdinalEncoder(), self.d_type_col(X)['binary']),
+                                        ('low_card', ce.OneHotEncoder(), self.d_type_col(X)['low_card']),
+                                        ('high_card', ce.HashingEncoder(), self.d_type_col(X)['high_card']),
+                                        #  ('numeric', StandardScaler(), self.d_type_col(X)['numeric'])
+                                        ], remainder='passthrough')
+
+        self.num_cols = self.d_type_col(X)['numeric']
+        self.num_trans = Pipeline([("numeric", StandardScaler())])
+
+        self.cat_cols = self.d_type_col(X)['binary'].union(self.d_type_col(X)['low_card']).union(self.d_type_col(X)['high_card'])
+        self.cat_trans = Pipeline([("categ", self.ct_cat)])
+
+        self.column_trans =  ColumnTransformer([
+                                        ('cat', self.cat_trans, self.cat_cols),
+                                        ('num', self.num_trans, self.num_cols),
+                                        ], remainder='passthrough')
+                
+                # ColumnTransformer([
+                #                    ("binary", d_enc[self.strat_binary], self.d_type_col(X)['binary']),
+                #                    ("low_card", d_enc[self.strat_low_card], self.d_type_col(X)['low_card']),
+                #                    ("high_card", d_enc[self.strat_high_card], self.d_type_col(X)['high_card']),
+                #                    ("numeric", d_enc[self.strat_quant], self.d_type_col(X)['numeric'])
+                #                    ])
+
+                # DataFrameMapper([(self.d_type_col(X)['binary'], d_enc[self.strat_binary]),
+                #                  (self.d_type_col(X)['low_card'], d_enc[self.strat_low_card]),
+                #                  (self.d_type_col(X)['high_card'], d_enc[self.strat_high_card]),
+                #                  (self.d_type_col(X)['remaind'], d_enc[self.strat_quant])],
+                #                 df_out=True)  #### DATAFRAMEMAPPER A EVITER !
+
         return self.column_trans.fit(X, y)
   
     def transform(self, X, y=None):
         return  self.column_trans.transform(X)
+
+##### Function to get the type of columns before encoding
+
+def d_type_col(X, thresh_card=12):
+    bin_cols = (X.nunique()[X.nunique()<=2].index)
+    X_C_cols = X.select_dtypes(include=['object', 'category'])
+    C_l_card_cols = X_C_cols.nunique()[X_C_cols.nunique().between(3, thresh_card)].index
+    C_h_card_cols = X_C_cols.nunique()[X_C_cols.nunique()>thresh_card].index
+    Q_cols = [c for c in X.select_dtypes(include=[np.number]).columns\
+                                                    if c not in bin_cols]
+    d_t = {'binary': bin_cols,
+            'low_card': C_l_card_cols,
+            'high_card': C_h_card_cols,
+            'numeric': Q_cols}
+    return d_t
+
 ''' create a pipeline with datapreprocessing column transformer and regressor
     then searches for best hyperparameters with gscv
     then stores best parameters
     then computes the scores of the model on testing set
     then computes the cv scores of the model on testing set'''
 
+
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import RandomizedSearchCV
+#from sklearn_pandas import DataFrameMapper
 
 def model_optimizer(data_preproc, name_reg, reg, param_grid,
-                    Xtr, ytr, Xte, yte,
-                    cv_search=5, groups=None, cv_test=6,
-                    gs_score='neg_root_mean_squared_error',
-                    search_strat='grid', n_iter=10):
-
+                    X, y, cv_search=5, groups=None,
+                    scv_scores='neg_root_mean_squared_error',
+                    search_strat='grid', n_iter=10, verbose=1):
+ 
     pipe = Pipeline([('preproc', data_preproc),
                     (name_reg, reg)])
     
-    # researching best hyperparameters and fitting on training set
+    # 0 | researching best hyperparameters and fitting on training set
     if search_strat=='grid':
         scv = GridSearchCV(pipe, param_grid = param_grid,
-                           cv=cv_search, scoring=gs_score, verbose=1)
-        print("grid")
+                           cv=cv_search, scoring=scv_scores,
+                           refit='neg_root_mean_squared_error',
+                           return_train_score=True, verbose=1)
+        print("Grid")
     elif search_strat=='rand':
         scv = RandomizedSearchCV(pipe, param_distributions = param_grid,
-                            cv=cv_search, n_iter= n_iter,
-                            scoring=gs_score, verbose=1)
-        print("randomized")
+                            cv=cv_search, n_iter=n_iter,
+                            scoring=scv_scores, 
+                            refit='neg_root_mean_squared_error',
+                            return_train_score=True, verbose=1)
+        print("Randomized")
     else:
-        print("ERROR: This strategy of hyperparameter tuning does not exist.")
-    scv.fit(Xtr, ytr, groups=groups) # to stratify the folds using a GroupFolds
+        print("ERROR: This strategy of hyperparameter tuning doesn't exist.")
 
-    # best hyperparams
+    scv.fit(X, y, groups=groups) # to stratify the folds using a GroupFolds
+
+    return scv
+
+# Recreates the encoded and scaled DataFrame
+
+def get_best_model_transf_df(scv, X, y):
+    best_c_trans = scv.best_estimator_.named_steps['preproc']
+    best_c_trans.fit(X, y)
+    name_cols = best_c_trans.get_feature_names(X)
+    X_enc = pd.DataFrame(best_c_trans.transform(X),
+                            columns=name_cols,
+                            index =X.index)
+    return X_enc
+
+# Gets various scores related to a model coming from gridsearch cv or randomizedSearchcv
+
+def scv_perf_fetcher(name_reg, scv,
+                     cv_results=True,
+                     Xte=None, yte=None,
+                     test_set=False,  exclude=['Adj_R2'],
+                     cross_val=False, cv_test=6):
+    
     df_res = pd.DataFrame(dtype = 'object')
-    df_res.at['name_params', name_reg] =\
-                    str(list(param_grid.keys()))
-    df_res.at['best_params', name_reg] =\
-                    str([scv.best_params_[p] for p in param_grid])
+    # 1 | best hyperparams and scores obtained during searchCV (training, testing)
+    if cv_results:
+        df_best_res = pd.DataFrame(scv.cv_results_).loc[scv.best_index_].astype('object')
+        df_res.at['best_params', name_reg] = str(df_best_res['params'])
+        li_index = df_best_res.index[df_best_res.index.str.startswith(('mean_', 'std_'))]
+        li_index = move_cat_containing(li_index, ['train', 'test', 'score', 'fit'])
+        for i in li_index:
+            df_res.at[i, name_reg] = df_best_res[i]
 
-    # score of the model with best params on testing set
-    ypr = scv.predict(Xte)
-    res = scores_reg(name_reg, Xte, yte, ypr,
-    	             exclude=['Adj_R2']).astype('object')
-    df_res = df_res.append(res.to_frame())
+    # 2 | score of the model with best params on test set (optional)
+    if test_set:
+        ypr = scv.best_estimator_.predict(Xte)
+        res = scores_reg(name_reg, Xte, yte, ypr,
+                        exclude=['Adj_R2']).astype('object')
+        df_res = df_res.append(res.to_frame())
 
-    # mean cv score of the model with best params on testing set
-    res = cv_scores_reg(name_reg, scv.best_estimator_,
-                        Xte, yte, cv=cv_test).astype('object')
-    df_res = df_res.append(res.to_frame())
+    # 3 | mean cv score of the model with best params on test set (optional)
+    if cross_val:
+        res = cv_scores_reg(name_reg, scv.best_estimator_,
+                            Xte, yte, cv=cv_test).astype('object')
+        df_res = df_res.append(res.to_frame())
 
-    return scv, df_res
-
-# def model_optimizer(data_preproc, name_reg, reg,  param_grid,
-#                     Xtr, ytr, Xte, yte, cv_gs=5, cv_test=5):
-
-#     param_grid_pipe = {str(reg)[:-2].lower()+'__'+k : v \
-#                 for k,v in param_grid.items()}
-#     pipe = make_pipeline(data_preproc, reg)
-
-#     # researching best hyperparameters and fitting on training set
-#     gscv = GridSearchCV(pipe,
-#                         param_grid=param_grid_pipe,
-#                         cv=cv_gs, verbose=1)
-#     gscv.fit(Xtr,ytr)
-
-#     # best hyperparams
-#     df_res = pd.DataFrame(dtype = 'object')
-#     df_res.at['name_params', name_reg] =\
-#                     str(list(param_grid.keys()))
-#     df_res.at['best_params', name_reg] =\
-#                     str([gscv.best_params_[p] for p in param_grid_pipe])
-
-#     # score of the model with best params on testing set
-#     ypr = gscv.predict(Xte)
-#     res = scores_reg(name_reg, Xte, yte, ypr).astype('object')
-#     df_res = df_res.append(res.to_frame())
-
-#     # mean cv score of the model with best params on testing set
-#     res = cv_scores_reg(name_reg, gscv.best_estimator_,
-#                         Xte, yte, cv=cv_test).astype('object')
-#     df_res = df_res.append(res.to_frame())
-
-#     return gscv, df_res
+    return df_res
 
 ## When searching for 2 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
 
@@ -680,7 +722,7 @@ def plot_learning_curve(model, X, y, train_sizes, label, c='r',
                                    scoring=scoring, cv=cv)
     scores = -valid_scores.mean(1) if scoring!='r2' else valid_scores.mean(1)
     ax.plot(train_sizes, scores, 'o-', color=c, label=label)
-    ax.set_xlabel("Train size"), ax.set_ylabel("R2")
+    ax.set_xlabel("Train size"), ax.set_ylabel(scoring)
     ax.set_title('Learning curves', fontweight='bold')
     ax.legend(loc="best")
     fig.set_facecolor('w')
