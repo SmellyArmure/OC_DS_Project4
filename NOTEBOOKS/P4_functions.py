@@ -5,7 +5,6 @@ import numpy as np
 import missingno as msno
 import seaborn as sns
 
-from sklearn.decomposition import pca
 from sklearn.dummy import DummyRegressor, DummyClassifier
 from sklearn.feature_extraction import FeatureHasher
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -590,34 +589,67 @@ from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import RandomizedSearchCV
 #from sklearn_pandas import DataFrameMapper
 
-def model_optimizer(data_preproc, name_reg, reg, param_grid,
-                    X, y, cv_search=5, groups=None,
+def model_optimizer(name_reg, reg, param_grid,
+                    data_preproc, X=None, y=None, cv_search=5,
                     scv_scores='neg_root_mean_squared_error',
-                    search_strat='grid', n_iter=10, verbose=1):
- 
+                    refit='neg_root_mean_squared_error',
+                    search_strat='grid', n_iter=10,
+                    groups=None, verbose=1):
+
+    if param_grid is None: print("ERROR: 'param_grid' is not specified")
+
     pipe = Pipeline([('preproc', data_preproc),
                     (name_reg, reg)])
     
     # 0 | researching best hyperparameters and fitting on training set
     if search_strat=='grid':
         scv = GridSearchCV(pipe, param_grid = param_grid,
-                           cv=cv_search, scoring=scv_scores,
-                           refit='neg_root_mean_squared_error',
-                           return_train_score=True, verbose=1)
+                           cv=cv_search, 
+                           scoring=scv_scores, 
+                           refit=refit,
+                           return_train_score=True,
+                           verbose=1)
         print("Grid")
     elif search_strat=='rand':
         scv = RandomizedSearchCV(pipe, param_distributions = param_grid,
-                            cv=cv_search, n_iter=n_iter,
-                            scoring=scv_scores, 
-                            refit='neg_root_mean_squared_error',
-                            return_train_score=True, verbose=1)
+                                 cv=cv_search,
+                                 scoring=scv_scores, 
+                                 refit=refit,
+                                 return_train_score=True,
+                                 n_iter=n_iter, verbose=1)
         print("Randomized")
     else:
         print("ERROR: This strategy of hyperparameter tuning doesn't exist.")
 
-    scv.fit(X, y, groups=groups) # to stratify the folds using a GroupFolds
+    scv.fit(X, y, groups=groups) # to use a GroupKFolds
 
     return scv
+
+
+''' Function that encapsulates model_optimizer,
+test of wether the model already exists or not in pickle,
+saving the computed model in the pickle,
+aggregate the results in a dataframe'''
+
+def run_optimization(name_reg, reg, param_grid, file_name, dict_models, dict_scv_params, 
+                     df_res, search_strat, n_iter=50):
+
+    # If model with the same name already in dict_models, just takes existing model
+    if dict_models.get(name_reg, np.nan) is not np.nan:
+        print('-----Model already exists - taking existing model')
+    # Else computes new model and add to the dictionnary, and then to the pickle
+    else:
+        print('-----Model not existing - computing...')
+        dict_models[name_reg] = \
+            model_optimizer(name_reg, reg, param_grid, **dict_scv_params,
+                            search_strat=search_strat, n_iter=n_iter)
+        with open(os.getcwd()+'/P4_models.pkl', "wb") as f:
+            dill.dump(dict_models, f)
+        print("-----...model dumped")
+    
+    new_df_res = scv_perf_fetcher(name_reg, dict_models[name_reg])
+    return pd.concat([df_res, new_df_res], axis=1)
+
 
 # Recreates the encoded and scaled DataFrame
 
@@ -664,47 +696,26 @@ def scv_perf_fetcher(name_reg, scv,
     return df_res
 
 ## When searching for 2 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
+## the score displayed for each cell is the one for the best other parameters.
 
-def plot_2D_hyperparam_opt(gscv, params=None):
-    gscv_res = gscv.cv_results_
-    df_gscv = pd.DataFrame(gscv_res)
-    if params:
-        params_gscv = ['param_'+p for p in params]  # example: params=['my_ElasticNet__alpha', 'my_ElasticNet__l1_ratio']
+def plot_2D_hyperparam_opt(scv, params=None, score = 'neg_root_mean_squared_error'):
+
+    scv_res = scv.cv_results_
+    df_scv = pd.DataFrame(scv_res)
+    if params: # example: params=['enet__alpha', 'enet__l1_ratio']
+        params_scv = ['param_'+p for p in params]
     else:
-        params_gscv = df_gscv.columns[df_gscv.columns.str.contains('param_')].to_list()
-        if len(params_gscv)!=2:
-            print('ERROR : please provide exactly two parameters to display')
-            return None
-            # params_gscv = params_gscv[0:2]
+        params_scv = df_scv.columns[df_scv.columns.str.contains('param_')].to_list()
+        if len(params_scv)!=2:
+            print('WARNING : parameters to display were guessed,\
+                provide the params parameter with 2 parameters')
+            params_scv = params_scv[0:2]
         else:
-            params_gscv = params_gscv
-    max_scores = df_gscv.groupby(params_gscv).max()
-    sns.heatmap(max_scores.unstack()['mean_test_score'], annot=True, fmt='.4g');
-
-## When searching for 1 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
-#### A REPARER, ne marche plus quand on active return_train_score du gridsearch
-def plot_1D_hyperparam_opt(gscv, log_sc=False, param=None):
-   
-    gscv_res = gscv.cv_results_
-    df_gscv = pd.DataFrame(gscv_res)
-    if param:
-        param_gscv = 'param_'+param  # example: param='KNN__n_neighbors'
-    else:
-        param_gscv = df_gscv.columns[df_gscv.columns.str.contains('param_')]
-        if len(param_gscv)!=1:
-            print('ERROR : there is more than one parameter, try smthg else')
-            return None
-        else:
-            param_gscv = param_gscv[0]
-    
-    li_p = gscv.cv_results_[param_gscv].tolist()
-    max_scores = df_gscv.groupby(param_gscv).max()
-    plt.errorbar(li_p, max_scores.unstack()['mean_test_score'], color='r',
-                yerr=gscv_res['std_test_score'])
-    plt.gca().set_title(param_gscv)
-    if log_sc: plt.gca().set_xscale('log')
-    plt.gcf().set_facecolor('w')
-
+            params_scv = params_scv
+    # Not suitable for 3D viz : takes the max among all other parameters !!!
+    max_scores = df_scv.groupby(params_scv).agg(lambda x: max(x))
+    sns.heatmap(max_scores.unstack()['mean_test_'+score],
+                annot=True, fmt='.4g');
 
 ''' Plotting the leraning curve of a model.
 Allow iterative addition of other curves on the same figure if passed in arguments'''
@@ -717,7 +728,7 @@ def plot_learning_curve(model, X, y, train_sizes, label, c='r',
         fig = plt.figure()
         ax = fig.add_subplot()
     ax = fig.axes[0]
-    train_sizes, train_scores,valid_scores = \
+    train_sizes, train_scores, valid_scores = \
                     learning_curve(model, X, y, train_sizes=train_sizes,
                                    scoring=scoring, cv=cv)
     scores = -valid_scores.mean(1) if scoring!='r2' else valid_scores.mean(1)
@@ -728,58 +739,69 @@ def plot_learning_curve(model, X, y, train_sizes, label, c='r',
     fig.set_facecolor('w')
     return fig
 
-''' plots the training and test scores obtained during the SearchCV (either Randomized or Grid)
-In case you want to select only the influence of one optimized parameter, pass the a filtered 'result'
-variable, that can be obtained using the 'filters_cv_results' function'''
+''' Plots the training and test scores obtained during the SearchCV (either Randomized or Grid)
+the other parameters are parameters of the best estimator (found by gridsearch)'''
 
-def plot_scv_multi_scores(scv, param, results=None, name_reg=None,
-	title=None, figsize = (10, 4)):
+def plot_scv_multi_scores(name_reg, scv, param, title = None, figsize = (12, 4)):
 
     if name_reg is None :
         name_reg = scv.estimator.steps[1][0]
+
+    best_params, df_sel, df_gscv_filt = filters_cv_results(scv,param)
+    results = df_gscv_filt
+
     if title is None :
-    	title = "Multiple scores of SearchCV for '"+str(name_reg)+"'"
-    if results is None : results = scv.cv_results_
+        title = f"SearchCV results of '{str(name_reg)}'"
 
     scoring = scv.scoring
     fig, axs = plt.subplots(1,len(scoring))
     fig.set_size_inches(figsize)
     fig.suptitle(title, fontsize=16, fontweight='bold')
-    
+
     li_colors = ['b', 'r', 'g', 'purple', 'orange', 'pink']
-    if type(axs) is not list: axs = [axs]
+    if len(axs)==1 : axs = [axs]
 
     # Get the regular np array from the MaskedArray
-    X_axis = np.array(results[param].data, dtype=float)
-
+    X_axis = np.array(results['param_'+param], dtype='float')
     for scorer, color, ax in zip(sorted(scoring), li_colors[:len(scoring)], axs):
         for sample, style in (('train', '--'), ('test', '-')):
-            sample_score_mean = results['mean_%s_%s' % (sample, scorer)]
-            sample_score_std = results['std_%s_%s' % (sample, scorer)]
-            ax.fill_between(X_axis, sample_score_mean - sample_score_std,
+            sample_score_mean = results['mean_%s_%s' % (sample, scorer)].values
+            sample_score_std = results['std_%s_%s' % (sample, scorer)].values
+            alpha = 0.2 if sample == 'test' else 0.1
+            ax.fill_between(X_axis,
+                            sample_score_mean - sample_score_std,
                             sample_score_mean + sample_score_std,
-                            alpha=0.2 if sample == 'test' else 0.1, color=color)
+                            alpha=alpha, color=color)
             ax.plot(X_axis, sample_score_mean, style, marker='o', markersize=3,
-            	color=color, alpha=1 if sample == 'test' else 0.7,
-                    label="%s (%s)" % (scorer, sample))
+                color=color, alpha=1 if sample == 'test' else 0.7, label=f"{sample}")
+            ax.set_title(scorer)
             
         y_min, y_max = ax.get_ylim()
+        
         # Plot a dotted vertical line at the best score for that scorer marked by x
-        best_index = np.nonzero(results['rank_test_%s' % scorer] == 1)[0][0]
-        best_score = results['mean_test_%s' % scorer][best_index]
-        ax.plot([X_axis[best_index], ] * 2, [y_min - abs(y_min)*0.1,
-                                             best_score], # 
-            linestyle='-.', color=color, marker='x', markeredgewidth=3, ms=8)
+        best_index = results['rank_test_%s' % scorer].argmin()
+        best_score = results['mean_test_%s' % scorer].iloc[best_index]
+        ax.plot([X_axis[best_index], ] * 2, [y_min - abs(y_min)*0.1, best_score],
+            linestyle='dotted', color=color, marker='x', markeredgewidth=3, ms=8)
         ax.set_ylim(y_min, y_max)
         ax.set_xlabel(param)
         ax.set_ylabel("Score")
         ax.legend(loc="best")
 
         # Annotate the best score for that scorer
-        ax.annotate("%0.2f" % best_score, 
-                    (X_axis[best_index]*1.05, best_score*1+abs(best_score)*.1))
-        
-    plt.tight_layout(rect=(0.05,0,0.95,0.95))
+        len_str = len("{:.2f}".format(best_score))
+        if X_axis[best_index] < np.mean(X_axis):
+            x_pos = X_axis[best_index]*(1+0.015*len_str)
+        else:
+            x_pos = X_axis[best_index]*(1-0.015*len_str)
+        y_pos = best_score*1+(y_max-y_min)*0.05
+        ax.annotate("{:0.2f}".format(best_score), 
+                    (x_pos, y_pos),
+                    color = color)  
+    # plt.annotate(str(best_params), xy=(0,0))
+    plt.tight_layout(rect=(0,0,1,0.92))
+    plt.show()
+
 
 
 ''' Takes a gridsearch or randomizedsearch and one parameter
@@ -813,6 +835,65 @@ def filters_cv_results(gscv, param):
     df_sel_scores = df_gscv_filt[['param_'+param]+list(scores)].set_index('param_'+param)
 
     return best_params, df_sel_scores, df_gscv_filt
+
+'''Plotting one given score for all or a selection of the hyperparameters tested with a gsearch
+Can choose the aggregation function for the score on all other parameters
+option for using pooled standard deviation in stead of regular std'''
+
+def plot_hyperparam_tuning(gs, grid_params, params=None, score='score',
+                           pooled_std=False, agg_func=np.mean):
+
+    if params is not None:
+        grid_params = {k:v for (k,v) in grid_params.items() if k in params}
+
+    def pooled_var(stds):
+        n = 5 # size of each group
+        return np.sqrt(sum((n-1)*(stds**2))/ len(stds)*(n-1))
+    # recalculates the standard deviation using pooled variance
+    std_func = pooled_var if pooled_std else np.std
+
+    df = pd.DataFrame(gs.cv_results_)
+    results = ['mean_test_'+score,
+                'mean_train_'+score,
+                'std_test_'+score, 
+                'std_train_'+score]
+
+    fig, axes = plt.subplots(1, len(grid_params), 
+                            figsize = (5*len(grid_params), 5),
+                            sharey='row')
+    axes[0].set_ylabel(score, fontsize=15)
+
+    for idx, (param_name, param_range) in enumerate(grid_params.items()):
+        grouped_df = df.groupby('param_'+param_name)[results]\
+            .agg({'mean_train_'+score: agg_func,
+                'mean_test_'+score: agg_func,
+                'std_train_'+score: std_func,
+                'std_test_'+score: std_func})
+        previous_group = df.groupby(f'param_{param_name}')[results]
+        lw = 2
+        axes[idx].plot(param_range, grouped_df['mean_train_'+score], label="Train (CV)",
+                    color="darkorange",marker='o',ms=3, lw=lw)
+        axes[idx].fill_between(param_range,
+                            grouped_df['mean_train_'+score] - grouped_df['std_train_'+score],
+                            grouped_df['mean_train_'+score] + grouped_df['std_train_'+score], 
+                            alpha=0.2, color="darkorange", lw=lw)
+        axes[idx].plot(param_range, grouped_df['mean_test_'+score],
+                    label="Test (CV)", marker='o',ms=3, color="navy", lw=lw)
+        axes[idx].fill_between(param_range,
+                            grouped_df['mean_test_'+score] - grouped_df['std_test_'+score],
+                            grouped_df['mean_test_'+score] + grouped_df['std_test_'+score],
+                            alpha=0.2, color="navy", lw=lw)
+        axes[idx].set_xlabel(param_name, fontsize=15)
+        ymin, ymax = axes[idx].get_ylim()
+        # axes[idx].set_ylim(ymin, 0*ymax)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.suptitle('Hyperparameters tuning', x=0.4, y=0.95, fontsize=18, fontweight='bold')
+    fig.legend(handles, labels, loc=1, ncol=1, fontsize=14)
+
+    fig.subplots_adjust(bottom=0.25, top=0.85, right=0.97)  
+    plt.show()
+
 
 '''calculates VIF and exclude colinear columns'''
 
@@ -855,3 +936,26 @@ def select_from_vif_debugged_(X, thresh=100):
 	print('Remaining variables:')
 	print(X.columns[variables])
 	return X[cols[variables]]
+
+	''' SCORERS'''
+
+from sklearn.metrics import make_scorer
+
+def calc_rev_log1p_mae(y_log, y_log_pr):
+    y = np.exp(y_log)-1
+    ypr = np.exp(y_log_pr)-1
+    return metrics.mean_absolute_error(y, ypr)
+
+def cal_rev_log1p_rmse(y_log, y_log_pr):
+    y = np.exp(y_log)-1
+    ypr = np.exp(y_log_pr)-1
+    return np.sqrt(metrics.mean_squared_error(y, ypr))
+
+def calc_rev_log1p_r2(y_log, y_log_pr):
+    y = np.exp(y_log)-1
+    ypr = np.exp(y_log_pr)-1
+    return metrics.r2_score(y, ypr)
+
+rev_log1p_mae = make_scorer(calc_rev_log1p_mae, greater_is_better=False)
+rev_log1p_rmse = make_scorer(cal_rev_log1p_rmse, greater_is_better=False)  
+rev_log1p_r2 = make_scorer(calc_rev_log1p_r2, greater_is_better=True)  
