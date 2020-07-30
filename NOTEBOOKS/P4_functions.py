@@ -584,22 +584,16 @@ def d_type_col(X, thresh_card=12):
     then computes the scores of the model on testing set
     then computes the cv scores of the model on testing set'''
 
-
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import RandomizedSearchCV
+
 #from sklearn_pandas import DataFrameMapper
 
 def model_optimizer(name_reg, reg, param_grid,
-                    data_preproc, X=None, y=None, cv_search=5,
+                    pipe, X=None, y=None, cv_search=5,
                     scv_scores='neg_root_mean_squared_error',
                     refit='neg_root_mean_squared_error',
-                    search_strat='grid', n_iter=10,
-                    groups=None, verbose=1):
-
-    if param_grid is None: print("ERROR: 'param_grid' is not specified")
-
-    pipe = Pipeline([('preproc', data_preproc),
-                    (name_reg, reg)])
+                    search_strat='grid', n_iter=10, groups=None, verbose=1):
     
     # 0 | researching best hyperparameters and fitting on training set
     if search_strat=='grid':
@@ -625,14 +619,54 @@ def model_optimizer(name_reg, reg, param_grid,
 
     return scv
 
+'''Building and returning the dict_scv_params depending on the target and
+the use of log transformation, as well as the names of the files to save scv and learning curves data.
+'''
+def set_dict_scv_params(X, y, target, log_on, refit):
+
+    # Choice of the target
+    if target == 'SEU':
+        y_mod = y['SiteEnergyUseWN(kBtu)']
+        models_file_name = os.getcwd()+'/P4_models_SEU.pkl'
+        l_curves_file_name = os.getcwd()+'/P4_lcurves_SEU.pkl'
+    elif target == 'GHG':
+        y_mod_ = y['TotalGHGEmissions']
+        models_file_name = os.getcwd()+'/P4_models_GHG.pkl'
+        l_curves_file_name = os.getcwd()+'/P4_lcurves_GHG.pkl'
+
+    # Choice to fit y or log(1+y)
+    if log_on: # scores defined in P4_functions.py
+        y_mod = np.log1p(y_mod), np.log1p(y_mod)
+        scorers = {'r2_log': r2_log,
+                   'mae_log': mae_log,
+                   'rmse_log': rmse_log,
+                   'mpse_log': mpse_log,
+                   'pred_rate_10_log': pred_rate_10_log}
+        score_refit = refit+'_log'
+    else:
+        scorers = {'r2': r2,
+                   'mae': mae,
+                   'rmse': rmse,
+                   'mpse': mpse,
+                   'pred_rate_10': pred_rate_10}
+        score_refit = refit
+
+    dict_scv_params = dict(X = X,
+                       y = y_mod,
+                       scv_scores = scorers,
+                       refit = score_refit)
+    return dict_scv_params, models_file_name, l_curves_file_name
+
 
 ''' Function that encapsulates model_optimizer,
 test of wether the model already exists or not in pickle,
 saving the computed model in the pickle,
 aggregate the results in a dataframe'''
 
-def run_optimization(name_reg, reg, param_grid, file_name, dict_models, dict_scv_params, 
-                     df_res, search_strat, n_iter=50):
+import dill
+
+def run_optimization(name_reg, reg, param_grid, file_name, dict_models, pipe, dict_scv_params,
+	                 cv_search, df_res, search_strat, n_iter=50):
 
     # If model with the same name already in dict_models, just takes existing model
     if dict_models.get(name_reg, np.nan) is not np.nan:
@@ -641,9 +675,9 @@ def run_optimization(name_reg, reg, param_grid, file_name, dict_models, dict_scv
     else:
         print('-----Model not existing - computing...')
         dict_models[name_reg] = \
-            model_optimizer(name_reg, reg, param_grid, **dict_scv_params,
+            model_optimizer(name_reg, reg, param_grid, pipe, **dict_scv_params,
                             search_strat=search_strat, n_iter=n_iter)
-        with open(os.getcwd()+'/P4_models.pkl', "wb") as f:
+        with open(file_name, "wb") as f:
             dill.dump(dict_models, f)
         print("-----...model dumped")
     
@@ -698,7 +732,8 @@ def scv_perf_fetcher(name_reg, scv,
 ## When searching for 2 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
 ## the score displayed for each cell is the one for the best other parameters.
 
-def plot_2D_hyperparam_opt(scv, params=None, score = 'neg_root_mean_squared_error'):
+def plot_2D_hyperparam_opt(scv, params=None, score = 'neg_root_mean_squared_error',
+                           title=None):
 
     scv_res = scv.cv_results_
     df_scv = pd.DataFrame(scv_res)
@@ -716,28 +751,132 @@ def plot_2D_hyperparam_opt(scv, params=None, score = 'neg_root_mean_squared_erro
     max_scores = df_scv.groupby(params_scv).agg(lambda x: max(x))
     sns.heatmap(max_scores.unstack()['mean_test_'+score],
                 annot=True, fmt='.4g');
+    if title is None:  title = score
+    plt.gcf().suptitle(title)
+
+'''
+Generate 3 plots: the test and training learning curve, the training
+samples vs fit times curve, the fit times vs score curve.
+'''
+
+from sklearn.model_selection import ShuffleSplit
+from matplotlib.lines import Line2D
+
+def plot_learning_curve(name_reg, estimator, X, y, ylim=None, cv=None,
+                        scoring='neg_root_mean_squared_error', score_name = "Score",
+                        file_name=None, dict_learn_curves=None,
+                        n_jobs=None, train_sizes=np.linspace(.1, 1.0, 5),
+                        c='r', axes=None, title=None):
+    if axes is None : fig, axes = plt.subplots(1, 3, figsize=(12, 3)) # plt.subplots(0, 3, figsize=(12, 3))
+
+    if dict_learn_curves is None: dict_learn_curves = {}
+
+    # If model with the same name already in dict_models, just takes existing model
+    if dict_learn_curves.get(name_reg, np.nan) is not np.nan:
+        print('-----Learning curve already exists - taking existing learning curve')
+        train_sizes, train_scores, test_scores, fit_times = \
+                         list(zip(*list(dict_learn_curves[name_reg].items())))[1]
+    
+    # Else computes new model and add to the dictionnary, and then to the pickle
+    else:
+        print('----- Learning curve not existing - computing...')
+
+        train_sizes, train_scores, test_scores, fit_times, _ = \
+        learning_curve(estimator, X, y, cv=cv, n_jobs=n_jobs,
+                     train_sizes=train_sizes, scoring = scoring,
+                       return_times=True) 
+        
+        d_ = {'train_sizes': train_sizes,
+          'train_scores': train_scores,
+          'test_scores': test_scores,
+          'fit_times': fit_times}
+        dict_learn_curves[name_reg] = d_
+        if file_name is not None:
+            with open(file_name, "wb") as f:
+                dill.dump(dict_learn_curves, f)
+            print("-----...learning curve dumped")
+        else:
+            print("-----...no file name to dump the learning curves dictionary")
+
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+    fit_times_mean = np.mean(fit_times, axis=1)
+    fit_times_std = np.std(fit_times, axis=1)
+
+    # Plot learning curve
+    axes[0].grid()
+    axes[0].fill_between(train_sizes, train_scores_mean - train_scores_std,
+                         train_scores_mean + train_scores_std, alpha=0.15,
+                         color=c)
+    axes[0].fill_between(train_sizes, test_scores_mean - test_scores_std,
+                         test_scores_mean + test_scores_std, alpha=0.3,
+                         color=c)
+    axes[0].plot(train_sizes, train_scores_mean, 'o-', mfc=None, ms=3,
+                 color=c, ls = 'dashed',  label="Training score")
+    axes[0].plot(train_sizes, test_scores_mean, 'o-', ms=3,
+                 color=c, ls = 'solid',
+                 label="Cross-validation score")
+    axes[0].set_title("Learning curves")
+    if ylim is not None: axes[0].set_ylim(*ylim)
+    axes[0].set_xlabel("Training examples")
+    axes[0].set_ylabel(score_name)
+    
+    cust_leg = [Line2D([0], [0], color='k', ls = 'solid', lw=2),
+                Line2D([0], [0], color='k', ls = 'dashed', lw=2)]
+    axes[0].legend(cust_leg, ['Train (CV)', 'Test (CV)'],loc="best")
+
+    # Plot n_samples vs fit_times
+    axes[1].grid()
+    axes[1].plot(train_sizes, fit_times_mean,
+                 'o-', color=c, ms=3)
+    axes[1].fill_between(train_sizes, fit_times_mean - fit_times_std,
+                         fit_times_mean + fit_times_std, color=c, alpha=0.2)
+    axes[1].set_xlabel("Training examples")
+    axes[1].set_ylabel("fit_times")
+    axes[1].set_title("Scalability of the model")
+
+    # Plot fit_time vs score
+    axes[2].grid()
+    axes[2].plot(fit_times_mean, test_scores_mean,
+                 'o-', ms=3, color=c, label=name_reg)
+    axes[2].fill_between(fit_times_mean, test_scores_mean - test_scores_std,
+                         test_scores_mean + test_scores_std, color=c, alpha=0.2)
+    axes[2].set_xlabel("fit_times")
+    axes[2].set_ylabel(score_name)
+    axes[2].set_title("Performance of the model")
+    axes[2].legend(loc=2, prop={'size': 10})# bbox_to_anchor = (0.2,1.1), ncol=4
+
+    plt.gcf().set_facecolor('w')
+    if title is not None:
+        plt.gcf().suptitle(title, fontsize=15, fontweight='bold')
+        plt.tight_layout(rect=(0,0,1,0.92))
+    else:
+        plt.tight_layout()
+    return plt
 
 ''' Plotting the leraning curve of a model.
 Allow iterative addition of other curves on the same figure if passed in arguments'''
 
 from sklearn.model_selection import learning_curve
 
-def plot_learning_curve(model, X, y, train_sizes, label, c='r',
-                        scoring="r2", cv=5, fig=None):
-    if fig is None:
-        fig = plt.figure()
-        ax = fig.add_subplot()
-    ax = fig.axes[0]
-    train_sizes, train_scores, valid_scores = \
-                    learning_curve(model, X, y, train_sizes=train_sizes,
-                                   scoring=scoring, cv=cv)
-    scores = -valid_scores.mean(1) if scoring!='r2' else valid_scores.mean(1)
-    ax.plot(train_sizes, scores, 'o-', color=c, label=label)
-    ax.set_xlabel("Train size"), ax.set_ylabel(scoring)
-    ax.set_title('Learning curves', fontweight='bold')
-    ax.legend(loc="best")
-    fig.set_facecolor('w')
-    return fig
+# def plot_learning_curve_old_version(model, X, y, train_sizes, label, c='r',
+#                         scoring="r2", cv=5, fig=None):
+#     if fig is None:
+#         fig = plt.figure()
+#         ax = fig.add_subplot()
+#     ax = fig.axes[0]
+#     train_sizes, train_scores, valid_scores = \
+#                     learning_curve(model, X, y, train_sizes=train_sizes,
+#                                    scoring=scoring, cv=cv)
+#     scores = -valid_scores.mean(1) if scoring!='r2' else valid_scores.mean(1)
+#     ax.plot(train_sizes, scores, 'o-', color=c, label=label)
+#     ax.set_xlabel("Train size"), ax.set_ylabel(scoring)
+#     ax.set_title('Learning curves', fontweight='bold')
+#     ax.legend(loc="best")
+#     fig.set_facecolor('w')
+#     return fig
 
 ''' Plots the training and test scores obtained during the SearchCV (either Randomized or Grid)
 the other parameters are parameters of the best estimator (found by gridsearch)'''
@@ -745,19 +884,15 @@ the other parameters are parameters of the best estimator (found by gridsearch)'
 def plot_scv_multi_scores(name_reg, scv, param, title = None, figsize = (12, 4)):
 
     if name_reg is None :
-        name_reg = scv.estimator.steps[1][0]
+        name_reg = scv.estimator.steps[2][0]
 
     best_params, df_sel, df_gscv_filt = filters_cv_results(scv,param)
     results = df_gscv_filt
 
-    if title is None :
-        title = f"SearchCV results of '{str(name_reg)}'"
-
     scoring = scv.scoring
     fig, axs = plt.subplots(1,len(scoring))
     fig.set_size_inches(figsize)
-    fig.suptitle(title, fontsize=16, fontweight='bold')
-
+    
     li_colors = ['b', 'r', 'g', 'purple', 'orange', 'pink']
     if len(axs)==1 : axs = [axs]
 
@@ -798,10 +933,12 @@ def plot_scv_multi_scores(name_reg, scv, param, title = None, figsize = (12, 4))
         ax.annotate("{:0.2f}".format(best_score), 
                     (x_pos, y_pos),
                     color = color)  
-    # plt.annotate(str(best_params), xy=(0,0))
-    plt.tight_layout(rect=(0,0,1,0.92))
+    if title is not None:
+        fig.suptitle(title, fontsize=16, fontweight='bold')
+        plt.tight_layout(rect=(0,0,1,0.92))
+    else:
+        plt.tight_layout()
     plt.show()
-
 
 
 ''' Takes a gridsearch or randomizedsearch and one parameter
@@ -859,9 +996,9 @@ def plot_hyperparam_tuning(gs, grid_params, params=None, score='score',
                 'std_train_'+score]
 
     fig, axes = plt.subplots(1, len(grid_params), 
-                            figsize = (5*len(grid_params), 5),
+                            figsize = (3.2*len(grid_params), 3),
                             sharey='row')
-    axes[0].set_ylabel(score, fontsize=15)
+    axes[0].set_ylabel(score, fontsize=12)
 
     for idx, (param_name, param_range) in enumerate(grid_params.items()):
         grouped_df = df.groupby('param_'+param_name)[results]\
@@ -883,13 +1020,13 @@ def plot_hyperparam_tuning(gs, grid_params, params=None, score='score',
                             grouped_df['mean_test_'+score] - grouped_df['std_test_'+score],
                             grouped_df['mean_test_'+score] + grouped_df['std_test_'+score],
                             alpha=0.2, color="navy", lw=lw)
-        axes[idx].set_xlabel(param_name, fontsize=15)
+        axes[idx].set_xlabel(param_name, fontsize=12)
         ymin, ymax = axes[idx].get_ylim()
         # axes[idx].set_ylim(ymin, 0*ymax)
 
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.suptitle('Hyperparameters tuning', x=0.4, y=0.95, fontsize=18, fontweight='bold')
-    fig.legend(handles, labels, loc=1, ncol=1, fontsize=14)
+    fig.suptitle('Hyperparameters tuning', x=0.4, y=0.95, fontsize=15, fontweight='bold')
+    fig.legend(handles, labels, loc=1, ncol=1, fontsize=12)
 
     fig.subplots_adjust(bottom=0.25, top=0.85, right=0.97)  
     plt.show()
@@ -939,23 +1076,56 @@ def select_from_vif_debugged_(X, thresh=100):
 
 	''' SCORERS'''
 
-from sklearn.metrics import make_scorer
+from sklearn import metrics
 
-def calc_rev_log1p_mae(y_log, y_log_pr):
+# Mean Absolute Error
+def calc_mae(y, ypr):
+    return metrics.mean_absolute_error(y, ypr)
+def calc_mae_log(y_log, y_log_pr):
     y = np.exp(y_log)-1
     ypr = np.exp(y_log_pr)-1
     return metrics.mean_absolute_error(y, ypr)
 
-def cal_rev_log1p_rmse(y_log, y_log_pr):
+# Root Mean Squared Error
+def calc_rmse(y, ypr):
+    return np.sqrt(metrics.mean_squared_error(y, ypr))
+def calc_rmse_log(y_log, y_log_pr):
     y = np.exp(y_log)-1
     ypr = np.exp(y_log_pr)-1
     return np.sqrt(metrics.mean_squared_error(y, ypr))
 
-def calc_rev_log1p_r2(y_log, y_log_pr):
+# Mean Percent Squared Error
+def calc_mpse(y, ypr):
+    return np.mean(np.square((y - ypr)/y))*100
+def calc_mpse_log(y_log, y_log_pr):
+    y = np.exp(y_log)-1
+    ypr = np.exp(y_log_pr)-1
+    return np.mean(np.square((y - ypr)/y))*100 
+
+# R2 score
+def calc_r2(y, ypr):
+    return metrics.r2_score(y, ypr)
+def calc_r2_log(y_log, y_log_pr):
     y = np.exp(y_log)-1
     ypr = np.exp(y_log_pr)-1
     return metrics.r2_score(y, ypr)
 
-rev_log1p_mae = make_scorer(calc_rev_log1p_mae, greater_is_better=False)
-rev_log1p_rmse = make_scorer(cal_rev_log1p_rmse, greater_is_better=False)  
-rev_log1p_r2 = make_scorer(calc_rev_log1p_r2, greater_is_better=True)  
+# Rate of predictions in 90-110%
+def calc_pred_rate_10(y, ypr):
+    return np.sum(np.abs((y - ypr)/y)<0.1)/y.size
+def calc_pred_rate_10_log(y_log, y_log_pr):
+    y = np.exp(y_log)-1
+    ypr = np.exp(y_log_pr)-1
+    return np.sum(np.abs((y - ypr)/y)<0.1)/y.size
+
+mae = metrics.make_scorer(calc_mae, greater_is_better=False)
+rmse = metrics.make_scorer(calc_rmse, greater_is_better=False) 
+mpse = metrics.make_scorer(calc_mpse, greater_is_better=False)  
+r2 = metrics.make_scorer(calc_r2, greater_is_better=True)
+pred_rate_10 = metrics.make_scorer(calc_pred_rate_10, greater_is_better=True)
+
+mae_log = metrics.make_scorer(calc_mae_log, greater_is_better=False)
+rmse_log = metrics.make_scorer(calc_rmse_log, greater_is_better=False)
+mpse_log = metrics.make_scorer(calc_mpse_log, greater_is_better=False)  
+r2_log = metrics.make_scorer(calc_r2_log, greater_is_better=True) 
+pred_rate_10_log = metrics.make_scorer(calc_pred_rate_10_log, greater_is_better=True)
