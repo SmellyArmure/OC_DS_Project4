@@ -590,9 +590,9 @@ from sklearn.model_selection import RandomizedSearchCV
 #from sklearn_pandas import DataFrameMapper
 
 def model_optimizer(name_reg, reg, param_grid,
-                    pipe, X=None, y=None, cv_search=5,
+                    pipe, X=None, y=None, 
                     scv_scores='neg_root_mean_squared_error',
-                    refit='neg_root_mean_squared_error',
+                    refit='neg_root_mean_squared_error', cv_search=5,
                     search_strat='grid', n_iter=10, groups=None, verbose=1):
     
     # 0 | researching best hyperparameters and fitting on training set
@@ -619,44 +619,6 @@ def model_optimizer(name_reg, reg, param_grid,
 
     return scv
 
-'''Building and returning the dict_scv_params depending on the target and
-the use of log transformation, as well as the names of the files to save scv and learning curves data.
-'''
-def set_dict_scv_params(X, y, target, log_on, refit):
-
-    # Choice of the target
-    if target == 'SEU':
-        y_mod = y['SiteEnergyUseWN(kBtu)']
-        models_file_name = os.getcwd()+'/P4_models_SEU.pkl'
-        l_curves_file_name = os.getcwd()+'/P4_lcurves_SEU.pkl'
-    elif target == 'GHG':
-        y_mod_ = y['TotalGHGEmissions']
-        models_file_name = os.getcwd()+'/P4_models_GHG.pkl'
-        l_curves_file_name = os.getcwd()+'/P4_lcurves_GHG.pkl'
-
-    # Choice to fit y or log(1+y)
-    if log_on: # scores defined in P4_functions.py
-        y_mod = np.log1p(y_mod), np.log1p(y_mod)
-        scorers = {'r2_log': r2_log,
-                   'mae_log': mae_log,
-                   'rmse_log': rmse_log,
-                   'mpse_log': mpse_log,
-                   'pred_rate_10_log': pred_rate_10_log}
-        score_refit = refit+'_log'
-    else:
-        scorers = {'r2': r2,
-                   'mae': mae,
-                   'rmse': rmse,
-                   'mpse': mpse,
-                   'pred_rate_10': pred_rate_10}
-        score_refit = refit
-
-    dict_scv_params = dict(X = X,
-                       y = y_mod,
-                       scv_scores = scorers,
-                       refit = score_refit)
-    return dict_scv_params, models_file_name, l_curves_file_name
-
 
 ''' Function that encapsulates model_optimizer,
 test of wether the model already exists or not in pickle,
@@ -675,7 +637,7 @@ def run_optimization(name_reg, reg, param_grid, file_name, dict_models, pipe, di
     else:
         print('-----Model not existing - computing...')
         dict_models[name_reg] = \
-            model_optimizer(name_reg, reg, param_grid, pipe, **dict_scv_params,
+            model_optimizer(name_reg, reg, param_grid, pipe, **dict_scv_params, cv_search=cv_search,
                             search_strat=search_strat, n_iter=n_iter)
         with open(file_name, "wb") as f:
             dill.dump(dict_models, f)
@@ -1031,6 +993,20 @@ def plot_hyperparam_tuning(gs, grid_params, params=None, score='score',
     fig.subplots_adjust(bottom=0.25, top=0.85, right=0.97)  
     plt.show()
 
+'''permutation importance using sklearn '''
+from sklearn.inspection import permutation_importance
+
+def plot_perm_importance(model, X, y, scoring='r2'):
+
+    results = permutation_importance(model, X, y, scoring=scoring) 
+    df_ = pd.DataFrame(results.importances_mean,
+                       index = X.columns, columns=[name_reg])
+
+    fig, ax = plt.subplots()
+    df_[name_reg].sort_values(ascending=False).plot.bar(color='grey')
+    fig.set_size_inches(12,3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right" )
+    return df_
 
 '''calculates VIF and exclude colinear columns'''
 
@@ -1129,3 +1105,41 @@ rmse_log = metrics.make_scorer(calc_rmse_log, greater_is_better=False)
 mpse_log = metrics.make_scorer(calc_mpse_log, greater_is_better=False)  
 r2_log = metrics.make_scorer(calc_r2_log, greater_is_better=True) 
 pred_rate_10_log = metrics.make_scorer(calc_pred_rate_10_log, greater_is_better=True)
+
+'''Building and returning the dict_scv_params depending on the target and
+the use of log transformation, as well as the names of the files to save scv and learning curves data.
+'''
+def set_dict_scv_params(X, y, target, log_on, refit):
+
+    # Choice of the target
+    if target == 'SEU':
+        y_mod = y['SiteEnergyUseWN(kBtu)']
+        models_file_name = os.getcwd()+'/P4_models_SEU.pkl'
+        l_curves_file_name = os.getcwd()+'/P4_lcurves_SEU.pkl'
+    elif target == 'GHG':
+        y_mod_ = y['TotalGHGEmissions']
+        models_file_name = os.getcwd()+'/P4_models_GHG.pkl'
+        l_curves_file_name = os.getcwd()+'/P4_lcurves_GHG.pkl'
+
+    # Choice to fit y or log(1+y)
+    if log_on: # scores defined in P4_functions.py
+        y_mod = np.log1p(y_mod)
+        scorers = {'r2_log': r2_log,
+                   'mae_log': mae_log,
+                   'rmse_log': rmse_log,
+                   'mpse_log': mpse_log,
+                   'pred_rate_10_log': pred_rate_10_log}
+        score_refit = refit+'_log'
+    else:
+        scorers = {'r2': r2,
+                   'mae': mae,
+                   'rmse': rmse,
+                   'mpse': mpse,
+                   'pred_rate_10': pred_rate_10}
+        score_refit = refit
+
+    dict_scv_params = dict(X = X,
+                       y = y_mod,
+                       scv_scores = scorers,
+                       refit = score_refit)
+    return dict_scv_params, models_file_name, l_curves_file_name
