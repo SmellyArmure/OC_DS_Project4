@@ -491,12 +491,6 @@ from sklearn.compose import ColumnTransformer
 import category_encoders as ce
 from sklearn.preprocessing import *
 
-from sklearn.base import BaseEstimator
-from sklearn.compose import ColumnTransformer
-import category_encoders as ce
-from sklearn.preprocessing import *
-
-
 class CustTransformer(BaseEstimator) :
 
     def __init__(self, thresh_card=12,
@@ -538,11 +532,13 @@ class CustTransformer(BaseEstimator) :
                  'norm': Normalizer(),
                  'quant_uni': QuantileTransformer(output_distribution='uniform'),
                  'quant_norm': QuantileTransformer(output_distribution='normal'),
-                 'boxcox': PowerTransformer(method='boxcox'), # 'yeo-johnson'
-                 'yeo': PowerTransformer(method='yeo-johnson'), # 'yeo-johnson'
+                 'boxcox': PowerTransformer(method='boxcox'),
+                 'yeo': PowerTransformer(method='yeo-johnson'),
+                 'none': FunctionTransformer(func=lambda x:x,
+                                             inverse_func=lambda x:x),
                  }
 
-        self.ct_cat =  ColumnTransformer([
+        self.ct_cat = ColumnTransformer([
                                         ('binary', d_enc[self.strat_binary], self.d_type_col(X)['binary']),
                                         ('low_card', d_enc[self.strat_low_card], self.d_type_col(X)['low_card']),
                                         ('high_card', d_enc[self.strat_high_card], self.d_type_col(X)['high_card']),
@@ -569,33 +565,33 @@ class CustTransformer(BaseEstimator) :
         return  self.column_trans.transform(X)
 
     def transform_df(self, X, y=None): # to get a dataframe
-     ### PBE A REPARER : ESTIMATOR HAS TO BE FIT TO RETURN FEATURES NAMES
-        return pd.DataFrame(self.column_trans.transform(X_tr),
+        return pd.DataFrame(self.column_trans.transform(X),
                             columns=self.get_feature_names())
 
-    def fit_transform(self, X, y=None, **fit_params):
+    def fit_transform(self, X, y=None):
         if y is None:
-            self.fit(X, **fit_params)
+            self.fit(X)
             return self.column_trans.transform(X)
         else:
-            self.fit(X, y, **fit_params)
-            return self.column_trans.transform(X,y)
+            self.fit(X, y)
+            return self.column_trans.transform(X)
 
-    def fit_transform_df(self, X, y=None, **fit_params):
-         ### PBE A REPARER : ESTIMATOR HAS TO BE FIT TO RETURN FEATURES NAMES
+    def fit_transform_df(self, X, y=None):
         if y is None:  
-            self.fit(X, **fit_params)
+            self.fit(X)
             return pd.DataFrame(self.column_trans.transform(X),
                             columns=self.get_feature_names())
         else: 
-            self.fit(X, y, **fit_params)
+            self.fit(X, y)
             return pd.DataFrame(self.column_trans.transform(X,y),
                             columns=self.get_feature_names())
 
 ''' Class to filter outliers from X and y from the zscore of the X columns
+eliminates a line if the value of one or more features is outlier. 
 (CANNOT BE USED IN A PIPELINE !!!)'''
 
 import scipy.stats as st
+from sklearn.base import BaseEstimator, TransformerMixin
 
 class ZscoreSampleFilter(BaseEstimator, TransformerMixin):
     def __init__(self, thresh = None):
@@ -622,13 +618,13 @@ class ZscoreSampleFilter(BaseEstimator, TransformerMixin):
         else:
             return self.fit(X, y, **fit_params).transform(X,y)
 
-
 """  
 Class to filter outliers from X and y from a LOF analysis on X
 (CANNOT BE USED IN A PIPELINE !!!)
 A threshold is set for selection criteria, 
 neg_conf_val (float): threshold for excluding samples with a lower
-               negative outlier factor.
+ negative outlier factor.
+ NB: may not be that useful, because we can use LocalOutlierFactor.predict method...
 """
 
 from sklearn.pipeline import Pipeline
@@ -648,6 +644,47 @@ class LOFSampleFilter(BaseEstimator, TransformerMixin):
         lcf.fit(X)
         # self.featurefilter = [True for c in X.columns] # pas de filtrage de colonnes
         self.samplefilter = lcf.negative_outlier_factor_ > self.neg_conf_val # filtrage de lignes
+        return self
+
+    def transform(self, X, y=None, copy=None):
+        # X_mod = X.loc[:,self.featurefilter]
+        X_mod = X.loc[self.samplefilter]
+        if y is not None:
+            y_mod = y.loc[self.samplefilter]
+            return X_mod, y_mod
+        else:
+            return X_mod
+
+    def fit_transform(self, X, y=None, **fit_params):
+        if y is None:
+            return self.fit(X, **fit_params).transform(X)
+        else:
+            return self.fit(X, y, **fit_params).transform(X,y)
+
+"""  
+Class to filter outliers from X and y from a LOF analysis on X
+(CANNOT BE USED IN A PIPELINE !!!)
+A threshold is set for selection criteria, 
+score_samples (float): threshold for excluding samples with a lower
+score_samples.
+NB: may not be that useful, because we can use IsolationForest.predict method...
+"""
+
+from sklearn.ensemble import IsolationForest
+
+class IsolForestSampleFilter(BaseEstimator, TransformerMixin):
+    def __init__(self, score_samples=None, n_estimators=None, **kwargs):
+        self.score_samples = score_samples if score_samples is not None else 2
+        self.n_estimators = n_estimators if n_estimators is not None else 100
+        self.kwargs = kwargs
+
+    def fit(self, X, y=None, *args, **kwargs):
+        # X = np.asarray(X)
+        # y = np.asarray(y)
+        isolf = IsolationForest(n_estimators=self.n_estimators, **self.kwargs)
+        isolf.fit(X)
+        # self.featurefilter = [True for c in X.columns] # pas de filtrage de colonnes
+        self.samplefilter = isolf.score_samples(X) > self.score_samples # filtrage de lignes
         return self
 
     def transform(self, X, y=None, copy=None):
@@ -1162,7 +1199,7 @@ the best parameters already found with a gridsearch. Browsing
 '''
 from sklearn.linear_model import Ridge, Lasso, ElasticNet
 
-def plot_compute_reg_path(scv, type_reg, alphas=np.logspace(-7,7,n_alphas)):
+def plot_compute_reg_path(scv, type_reg, alphas=np.logspace(-7,7,20)):
     d_preproc = {k.replace('preproc__cust_trans__', ''): v \
                     for k,v in scv.best_params_.items()\
                 if k.startswith('preproc__cust_trans__')}
@@ -1311,19 +1348,17 @@ def set_dict_scv_params(X, y, target, log_on, refit):
 
     # Choice of the target
     if target == 'SEU':
-        y_mod = y['SiteEnergyUseWN(kBtu)']
         models_file_name = os.getcwd()+'/P4_models_SEU.pkl'
         l_curves_file_name = os.getcwd()+'/P4_lcurves_SEU.pkl'
         perm_imp_file_name = os.getcwd()+'/P4_pimp_SEU.pkl'
     elif target == 'GHG':
-        y_mod_ = y['TotalGHGEmissions']
         models_file_name = os.getcwd()+'/P4_models_GHG.pkl'
         l_curves_file_name = os.getcwd()+'/P4_lcurves_GHG.pkl'
         perm_imp_file_name = os.getcwd()+'/P4_pimp_GHG.pkl'
 
     # Choice to fit y or log(1+y)
     if log_on: # scores defined in P4_functions.py
-        y_mod = np.log1p(y_mod)
+        y_mod = np.log1p(y.values)
         scorers = {'r2_log': r2_log,
                    'mae_log': mae_log,
                    'rmse_log': rmse_log,
@@ -1331,6 +1366,7 @@ def set_dict_scv_params(X, y, target, log_on, refit):
                    'pred_rate_10_log': pred_rate_10_log}
         score_refit = refit+'_log'
     else:
+        y_mod = y.values
         scorers = {'r2': r2,
                    'mae': mae,
                    'rmse': rmse,
@@ -1343,6 +1379,7 @@ def set_dict_scv_params(X, y, target, log_on, refit):
                        scv_scores = scorers,
                        refit = score_refit)
     return dict_scv_params, models_file_name, l_curves_file_name, perm_imp_file_name
+
 
 def load_pickle(f_name):
 # If file of models exists, open and load in dict_model
