@@ -475,6 +475,15 @@ cust_enc = CustTransformer(thresh_card=12,
 cust_enc.fit(X_tr, y1_tr)
 cust_enc.transform(X_tr).shape, X_tr.shape
 
+-> EXAMPLE (to fetch names of the modified dataframe):
+small_df = df[['Outlier', 'Neighborhood', 'CertifiedPreviousYear',
+               'NumberofFloors','ExtsurfVolRatio']]
+# small_df.head(2)
+cust_trans = CustTransformer()
+cust_trans.fit(small_df)
+df_enc = cust_trans.transform(small_df)
+cust_trans.get_feature_names(small_df)
+
 '''
 
 from sklearn.base import BaseEstimator
@@ -482,11 +491,17 @@ from sklearn.compose import ColumnTransformer
 import category_encoders as ce
 from sklearn.preprocessing import *
 
+from sklearn.base import BaseEstimator
+from sklearn.compose import ColumnTransformer
+import category_encoders as ce
+from sklearn.preprocessing import *
+
+
 class CustTransformer(BaseEstimator) :
 
     def __init__(self, thresh_card=12,
                  strat_binary = 'ord', strat_low_card ='ohe',
-                 strat_high_card ='hash', strat_quant = 'stand'):
+                 strat_high_card ='bin', strat_quant = 'stand'):
         self.thresh_card = thresh_card
         self.strat_binary = strat_binary
         self.strat_low_card = strat_low_card
@@ -506,9 +521,8 @@ class CustTransformer(BaseEstimator) :
                'numeric': Q_cols}
         return d_t
 
-    def get_feature_names(self, X):
-        self.ct_cat.fit(X)
-        return self.ct_cat.get_feature_names()
+    def get_feature_names(self):
+        return self.ct_cat.get_feature_names()+self.num_cols
 
     def fit(self, X, y=None):
         # Dictionary to translate strategies
@@ -524,18 +538,20 @@ class CustTransformer(BaseEstimator) :
                  'norm': Normalizer(),
                  'quant_uni': QuantileTransformer(output_distribution='uniform'),
                  'quant_norm': QuantileTransformer(output_distribution='normal'),
-                 'pow': PowerTransformer(method='yeo-johnson'), # 'boxcox'
+                 'boxcox': PowerTransformer(method='boxcox'), # 'yeo-johnson'
+                 'yeo': PowerTransformer(method='yeo-johnson'), # 'yeo-johnson'
                  }
 
         self.ct_cat =  ColumnTransformer([
-                                        ('binary', ce.OrdinalEncoder(), self.d_type_col(X)['binary']),
-                                        ('low_card', ce.OneHotEncoder(), self.d_type_col(X)['low_card']),
-                                        ('high_card', ce.HashingEncoder(), self.d_type_col(X)['high_card']),
-                                        #  ('numeric', StandardScaler(), self.d_type_col(X)['numeric'])
-                                        ], remainder='passthrough')
+                                        ('binary', d_enc[self.strat_binary], self.d_type_col(X)['binary']),
+                                        ('low_card', d_enc[self.strat_low_card], self.d_type_col(X)['low_card']),
+                                        ('high_card', d_enc[self.strat_high_card], self.d_type_col(X)['high_card']),
+                                        ],
+                                        #remainder='passthrough'
+                                        )
 
         self.num_cols = self.d_type_col(X)['numeric']
-        self.num_trans = Pipeline([("numeric", StandardScaler())])
+        self.num_trans = Pipeline([("numeric", d_enc[self.strat_quant])])
 
         self.cat_cols = self.d_type_col(X)['binary'].union(self.d_type_col(X)['low_card']).union(self.d_type_col(X)['high_card'])
         self.cat_trans = Pipeline([("categ", self.ct_cat)])
@@ -543,25 +559,111 @@ class CustTransformer(BaseEstimator) :
         self.column_trans =  ColumnTransformer([
                                         ('cat', self.cat_trans, self.cat_cols),
                                         ('num', self.num_trans, self.num_cols),
-                                        ], remainder='passthrough')
-                
-                # ColumnTransformer([
-                #                    ("binary", d_enc[self.strat_binary], self.d_type_col(X)['binary']),
-                #                    ("low_card", d_enc[self.strat_low_card], self.d_type_col(X)['low_card']),
-                #                    ("high_card", d_enc[self.strat_high_card], self.d_type_col(X)['high_card']),
-                #                    ("numeric", d_enc[self.strat_quant], self.d_type_col(X)['numeric'])
-                #                    ])
-
-                # DataFrameMapper([(self.d_type_col(X)['binary'], d_enc[self.strat_binary]),
-                #                  (self.d_type_col(X)['low_card'], d_enc[self.strat_low_card]),
-                #                  (self.d_type_col(X)['high_card'], d_enc[self.strat_high_card]),
-                #                  (self.d_type_col(X)['remaind'], d_enc[self.strat_quant])],
-                #                 df_out=True)  #### DATAFRAMEMAPPER A EVITER !
-
+                                        ],
+                                        # remainder='passthrough'
+                                        )
+        self.ct_cat.fit(X, y)
         return self.column_trans.fit(X, y)
   
-    def transform(self, X, y=None):
+    def transform(self, X, y=None): # to use in a pipeline
         return  self.column_trans.transform(X)
+
+    def transform_df(self, X, y=None): # to get a dataframe
+     ### PBE A REPARER : ESTIMATOR HAS TO BE FIT TO RETURN FEATURES NAMES
+        return pd.DataFrame(self.column_trans.transform(X_tr),
+                            columns=self.get_feature_names())
+
+    def fit_transform(self, X, y=None, **fit_params):
+        if y is None:
+            self.fit(X, **fit_params)
+            return self.column_trans.transform(X)
+        else:
+            self.fit(X, y, **fit_params)
+            return self.column_trans.transform(X,y)
+
+    def fit_transform_df(self, X, y=None, **fit_params):
+         ### PBE A REPARER : ESTIMATOR HAS TO BE FIT TO RETURN FEATURES NAMES
+        if y is None:  
+            self.fit(X, **fit_params)
+            return pd.DataFrame(self.column_trans.transform(X),
+                            columns=self.get_feature_names())
+        else: 
+            self.fit(X, y, **fit_params)
+            return pd.DataFrame(self.column_trans.transform(X,y),
+                            columns=self.get_feature_names())
+
+''' Class to filter outliers from X and y from the zscore of the X columns
+(CANNOT BE USED IN A PIPELINE !!!)'''
+
+import scipy.stats as st
+
+class ZscoreSampleFilter(BaseEstimator, TransformerMixin):
+    def __init__(self, thresh = None):
+        self.thresh = thresh
+
+    def fit(self, X, y=None):
+        self.X_zscore = X.apply(st.zscore, axis=0)
+        # self.featurefilter = [True for c in X.columns] # pas de filtrage de colonnes
+        self.samplefilter = (np.abs(self.X_zscore)<self.thresh).all(1) # filtrage de lignes
+        return self
+
+    def transform(self, X, y=None, copy=None):
+        # X_mod = X.loc[:,self.featurefilter]
+        X_mod = X.loc[self.samplefilter]
+        if y is not None:
+            y_mod = y.loc[self.samplefilter]
+            return X_mod, y_mod
+        else:
+            return X_mod
+
+    def fit_transform(self, X, y=None, **fit_params):
+        if y is None:
+            return self.fit(X, **fit_params).transform(X)
+        else:
+            return self.fit(X, y, **fit_params).transform(X,y)
+
+
+"""  
+Class to filter outliers from X and y from a LOF analysis on X
+(CANNOT BE USED IN A PIPELINE !!!)
+A threshold is set for selection criteria, 
+neg_conf_val (float): threshold for excluding samples with a lower
+               negative outlier factor.
+"""
+
+from sklearn.pipeline import Pipeline
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.neighbors import LocalOutlierFactor
+
+class LOFSampleFilter(BaseEstimator, TransformerMixin):
+    def __init__(self, neg_conf_val=None, n_neighbors=None, **kwargs):
+        self.neg_conf_val = neg_conf_val if neg_conf_val is not None else -10
+        self.n_neighbors = n_neighbors if n_neighbors is not None else 20
+        self.kwargs = kwargs
+
+    def fit(self, X, y=None, *args, **kwargs):
+        # X = np.asarray(X)
+        # y = np.asarray(y)
+        lcf = LocalOutlierFactor(n_neighbors=self.n_neighbors, **self.kwargs)
+        lcf.fit(X)
+        # self.featurefilter = [True for c in X.columns] # pas de filtrage de colonnes
+        self.samplefilter = lcf.negative_outlier_factor_ > self.neg_conf_val # filtrage de lignes
+        return self
+
+    def transform(self, X, y=None, copy=None):
+        # X_mod = X.loc[:,self.featurefilter]
+        X_mod = X.loc[self.samplefilter]
+        if y is not None:
+            y_mod = y.loc[self.samplefilter]
+            return X_mod, y_mod
+        else:
+            return X_mod
+
+    def fit_transform(self, X, y=None, **fit_params):
+        if y is None:
+            return self.fit(X, **fit_params).transform(X)
+        else:
+            return self.fit(X, y, **fit_params).transform(X,y)
 
 ##### Function to get the type of columns before encoding
 
@@ -595,7 +697,6 @@ def model_optimizer(name_reg, reg, param_grid,
                     refit='neg_root_mean_squared_error', cv_search=5,
                     search_strat='grid', n_iter=10, groups=None, verbose=1):
     
-    # 0 | researching best hyperparameters and fitting on training set
     if search_strat=='grid':
         scv = GridSearchCV(pipe, param_grid = param_grid,
                            cv=cv_search, 
@@ -695,7 +796,7 @@ def scv_perf_fetcher(name_reg, scv,
 ## the score displayed for each cell is the one for the best other parameters.
 
 def plot_2D_hyperparam_opt(scv, params=None, score = 'neg_root_mean_squared_error',
-                           title=None):
+                           title=None, ax=None):
 
     scv_res = scv.cv_results_
     df_scv = pd.DataFrame(scv_res)
@@ -712,7 +813,7 @@ def plot_2D_hyperparam_opt(scv, params=None, score = 'neg_root_mean_squared_erro
     # Not suitable for 3D viz : takes the max among all other parameters !!!
     max_scores = df_scv.groupby(params_scv).agg(lambda x: max(x))
     sns.heatmap(max_scores.unstack()['mean_test_'+score],
-                annot=True, fmt='.4g');
+                annot=True, fmt='.4g', ax=ax);
     if title is None:  title = score
     plt.gcf().suptitle(title)
 
@@ -843,7 +944,8 @@ from sklearn.model_selection import learning_curve
 ''' Plots the training and test scores obtained during the SearchCV (either Randomized or Grid)
 the other parameters are parameters of the best estimator (found by gridsearch)'''
 
-def plot_scv_multi_scores(name_reg, scv, param, title = None, figsize = (12, 4)):
+
+def plot_scv_multi_scores(name_reg, scv, param, title = None, x_log=False, loc='best', figsize = (12, 4)):
 
     if name_reg is None :
         name_reg = scv.estimator.steps[2][0]
@@ -865,12 +967,16 @@ def plot_scv_multi_scores(name_reg, scv, param, title = None, figsize = (12, 4))
             sample_score_mean = results['mean_%s_%s' % (sample, scorer)].values
             sample_score_std = results['std_%s_%s' % (sample, scorer)].values
             alpha = 0.2 if sample == 'test' else 0.1
-            ax.fill_between(X_axis,
-                            sample_score_mean - sample_score_std,
-                            sample_score_mean + sample_score_std,
+            df_ = pd.DataFrame({'param': X_axis,
+                                'mean': sample_score_mean,
+                                'std': sample_score_std}).sort_values(by='param')
+            ax.fill_between(df_['param'],
+                            df_['mean'] - df_['std'],
+                            df_['mean'] + df_['std'],
                             alpha=alpha, color=color)
-            ax.plot(X_axis, sample_score_mean, style, marker='o', markersize=3,
+            ax.plot(df_['param'], df_['mean'], style, marker='o', markersize=3,
                 color=color, alpha=1 if sample == 'test' else 0.7, label=f"{sample}")
+            if x_log: ax.set_xscale('log')
             ax.set_title(scorer)
             
         y_min, y_max = ax.get_ylim()
@@ -883,7 +989,7 @@ def plot_scv_multi_scores(name_reg, scv, param, title = None, figsize = (12, 4))
         ax.set_ylim(y_min, y_max)
         ax.set_xlabel(param)
         ax.set_ylabel("Score")
-        ax.legend(loc="best")
+        ax.legend(loc=loc)
 
         # Annotate the best score for that scorer
         len_str = len("{:.2f}".format(best_score))
@@ -901,6 +1007,7 @@ def plot_scv_multi_scores(name_reg, scv, param, title = None, figsize = (12, 4))
     else:
         plt.tight_layout()
     plt.show()
+
 
 
 ''' Takes a gridsearch or randomizedsearch and one parameter
@@ -996,17 +1103,108 @@ def plot_hyperparam_tuning(gs, grid_params, params=None, score='score',
 '''permutation importance using sklearn '''
 from sklearn.inspection import permutation_importance
 
-def plot_perm_importance(model, X, y, scoring='r2'):
+def plot_perm_importance(model, name_reg, X, y, scoring='r2',
+                         dict_perm_imp=None, file_name=None):
 
-    results = permutation_importance(model, X, y, scoring=scoring) 
-    df_ = pd.DataFrame(results.importances_mean,
-                       index = X.columns, columns=[name_reg])
+    # If model with the same name already in dict_models, just takes existing model
+    if dict_perm_imp.get(name_reg, np.nan) is not np.nan:
+        print('-----Permutation importance - taking existing model')
+        ser = dict_perm_imp[name_reg]
+    # Else computes new model and add to the dictionnary, and then to the pickle
+    else:
+        print('-----Permutation importance not existing - computing...')
+        results = permutation_importance(model, X, y, scoring=scoring)
+        ser = pd.Series(results.importances_mean, index = X.columns)
+        
+    dict_perm_imp[name_reg] = ser
+
+    with open(file_name, "wb") as f:
+        dill.dump(dict_perm_imp, f)
+    print("-----...model dumped")
 
     fig, ax = plt.subplots()
-    df_[name_reg].sort_values(ascending=False).plot.bar(color='grey')
-    fig.set_size_inches(12,3)
+    ser.sort_values(ascending=False).plot.bar(color='grey');
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right" )
-    return df_
+    fig.set_size_inches(12,3)
+    plt.show()
+
+    return dict_perm_imp
+
+'''Plotting the feature importance of the best estimator obtained with
+a GridsearchCV or RandomizedSearchCV'''
+
+def plot_model_feat_imp(scv):
+    
+    # Getting the names of the transformed columns
+    step_ct = scv.best_estimator_.\
+                            named_steps['preproc'].named_steps['cust_trans']
+    col_names = step_ct.get_feature_names()
+    # Getting the list of the coefficients (wether usinf 'coef_' or 'feature_importances')
+    step_reg = scv.best_estimator_.named_steps[name_reg]
+    if hasattr(step_reg, "coef_"):
+        col_coefs = step_reg.coef_
+    elif hasattr(step_reg, "feature_importances_"):
+        col_coefs = step_reg.feature_importances_
+    else:
+        print("ERROR: This regressor has no 'coef_' or 'feature_importances_' attribute")
+
+    ser = pd.Series(col_coefs, index = col_names)
+
+    fig, ax = plt.subplots()
+    ser.sort_values(ascending=False).plot.bar(color='red');
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right" )
+    fig.set_size_inches(15,3)
+    plt.show()
+
+''' Computing and plotting the regularisation path from
+the best parameters already found with a gridsearch. Browsing
+ a given interval of alphas.
+'''
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
+
+def plot_compute_reg_path(scv, type_reg, alphas=np.logspace(-7,7,n_alphas)):
+    d_preproc = {k.replace('preproc__cust_trans__', ''): v \
+                    for k,v in scv.best_params_.items()\
+                if k.startswith('preproc__cust_trans__')}
+    preproc_pipe = Pipeline([('cust_trans',
+                            CustTransformer(**d_preproc))])
+    ### NE PAS OUBLIER DE METTRE TOUTES LES AUTRES ETAPES SI NECESSAIRE !!!!!
+
+    if type_reg == 'ridge':
+        reg = Ridge()
+    elif type_reg =='lasso':
+        reg = Lasso()
+    elif type_reg == 'enet':
+        reg = ElasticNet()
+
+    coefs = []
+    for a in alphas:
+        pipe_ = Pipeline([('preproc', preproc_pipe),
+                        ('reg', reg.set_params(alpha=a, fit_intercept=False))])
+        pipe_.fit(dict_scv_params['X'], dict_scv_params['y'])
+        fitted_reg = pipe_.named_steps['reg']
+        coefs.append(fitted_reg.coef_)
+
+    fig, ax = plt.subplots()
+    # Plotting the regularization path
+    ax.plot(alphas, coefs)
+    # Plotting a line for the best alpha
+    best_alpha = [v for k,v in scv.best_params_.items() if k.endswith('__alpha')][0]
+    ax.vlines(best_alpha, np.min(np.ravel(coefs)), np.max(np.ravel(coefs)))
+    # Getting the names of the transformed columns
+    step_ct = scv.best_estimator_.\
+                            named_steps['preproc'].named_steps['cust_trans']
+    col_names = step_ct.get_feature_names()
+
+    ax.set_xscale('log')
+    ax.set_xlim(ax.get_xlim()[::-1])  # reverse axis
+    ax.legend(labels=col_names, ncol=2, bbox_to_anchor=[1,1])
+    plt.xlabel('alpha'), plt.ylabel('weights')
+    plt.title(type_reg.title()+' coefficients as a function of the regularization')
+    plt.axis('tight')
+    fig.set_size_inches(12,6)
+    plt.show()
+
 
 '''calculates VIF and exclude colinear columns'''
 
@@ -1116,10 +1314,12 @@ def set_dict_scv_params(X, y, target, log_on, refit):
         y_mod = y['SiteEnergyUseWN(kBtu)']
         models_file_name = os.getcwd()+'/P4_models_SEU.pkl'
         l_curves_file_name = os.getcwd()+'/P4_lcurves_SEU.pkl'
+        perm_imp_file_name = os.getcwd()+'/P4_pimp_SEU.pkl'
     elif target == 'GHG':
         y_mod_ = y['TotalGHGEmissions']
         models_file_name = os.getcwd()+'/P4_models_GHG.pkl'
         l_curves_file_name = os.getcwd()+'/P4_lcurves_GHG.pkl'
+        perm_imp_file_name = os.getcwd()+'/P4_pimp_GHG.pkl'
 
     # Choice to fit y or log(1+y)
     if log_on: # scores defined in P4_functions.py
@@ -1142,4 +1342,18 @@ def set_dict_scv_params(X, y, target, log_on, refit):
                        y = y_mod,
                        scv_scores = scorers,
                        refit = score_refit)
-    return dict_scv_params, models_file_name, l_curves_file_name
+    return dict_scv_params, models_file_name, l_curves_file_name, perm_imp_file_name
+
+def load_pickle(f_name):
+# If file of models exists, open and load in dict_model
+    if os.path.exists(f_name):
+        with open(f_name, "rb") as f:
+            d_file = dill.load(f)
+        print('--Pickle containing models already existing as ',
+              f_name, ':\n', d_file.keys())
+        print("Content loaded from '", f_name, "'.")
+        return d_file
+    # Else create an empty dictionary
+    else:
+        print('--No pickle yet as ',f_name)
+        return {}
