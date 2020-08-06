@@ -803,6 +803,10 @@ def plot_2D_hyperparam_opt(scv, params=None, score = 'neg_root_mean_squared_erro
     max_scores = df_scv.groupby(params_scv).agg(lambda x: max(x))
     sns.heatmap(max_scores.unstack()['mean_test_'+score],
                 annot=True, fmt='.4g', ax=ax);
+    # A CHANGER PEUT-ETRE EVENTUELLEMENT POUR AFFICHER DES NOMBRES COMPACTS, QUAND LES PARAMS SONT DES NOMBRES
+    # print(plt.gca().get_yticklabels()[1].get_text())
+    # plt.gca().set_xticklabels = ['{:.4}'.format(x) if type(x)==np.number else x for x in plt.gca().get_xticklabels() ]
+    # plt.gca().set_yticklabels = ['{:.4}'.format(y) if type(y)==np.number else y for y in plt.gca().get_yticklabels() ]
     if title is None:  title = score
     plt.gcf().suptitle(title)
 
@@ -934,6 +938,7 @@ from sklearn.model_selection import learning_curve
 the other parameters are parameters of the best estimator (found by gridsearch)'''
 
 
+
 def plot_scv_multi_scores(name_reg, scv, param, title = None, x_log=False, loc='best', figsize = (12, 4)):
 
     if name_reg is None :
@@ -950,7 +955,9 @@ def plot_scv_multi_scores(name_reg, scv, param, title = None, x_log=False, loc='
     if len(axs)==1 : axs = [axs]
 
     # Get the regular np array from the MaskedArray
+       
     X_axis = np.array(results['param_'+param], dtype='float')
+        
     for scorer, color, ax in zip(sorted(scoring), li_colors[:len(scoring)], axs):
         for sample, style in (('train', '--'), ('test', '-')):
             sample_score_mean = results['mean_%s_%s' % (sample, scorer)].values
@@ -996,8 +1003,6 @@ def plot_scv_multi_scores(name_reg, scv, param, title = None, x_log=False, loc='
     else:
         plt.tight_layout()
     plt.show()
-
-
 
 ''' Takes a gridsearch or randomizedsearch and one parameter
 and isolate the influence of this parameter on all the scores
@@ -1119,17 +1124,15 @@ def plot_perm_importance(model, name_reg, X, y, scoring='r2',
 
     return dict_perm_imp
 
-'''Plotting the feature importance of the best estimator obtained with
-a GridsearchCV or RandomizedSearchCV'''
+'''Plotting the feature importance of a model'''
 
-def plot_model_feat_imp(scv):
+def plot_model_feat_imp(name_reg, model):
     
     # Getting the names of the transformed columns
-    step_ct = scv.best_estimator_.\
-                            named_steps['preproc'].named_steps['cust_trans']
+    step_ct = model.named_steps['preproc'].named_steps['cust_trans']
     col_names = step_ct.get_feature_names()
     # Getting the list of the coefficients (wether usinf 'coef_' or 'feature_importances')
-    step_reg = scv.best_estimator_.named_steps[name_reg]
+    step_reg = model.named_steps[name_reg]
     if hasattr(step_reg, "coef_"):
         col_coefs = step_reg.coef_
     elif hasattr(step_reg, "feature_importances_"):
@@ -1145,18 +1148,19 @@ def plot_model_feat_imp(scv):
     fig.set_size_inches(15,3)
     plt.show()
 
-''' Computing and plotting the regularisation path from
-the best parameters already found with a gridsearch. Browsing
- a given interval of alphas.
+
+''' Computing and plotting the regularisation path of a ridge, lasso or elasticnet model.
+The parameters for encoding of the features must be passed.
+ Browsing a given interval of alphas.
+ (NOT YET POSSIBILITY TO ENTER OTHER BEST PARAMS OF THE REGRESSOR ITSELF)
 '''
 from sklearn.linear_model import Ridge, Lasso, ElasticNet
+from matplotlib.rcsetup import cycler
 
-def plot_compute_reg_path(scv, type_reg, alphas=np.logspace(-7,7,20)):
-    d_preproc = {k.replace('preproc__cust_trans__', ''): v \
-                    for k,v in scv.best_params_.items()\
-                if k.startswith('preproc__cust_trans__')}
-    preproc_pipe = Pipeline([('cust_trans',
-                            CustTransformer(**d_preproc))])
+def plot_compute_reg_path(d_preproc, X, y, type_reg, alphas=np.logspace(-7,7,20)):
+
+    preproc_pipe = Pipeline([('cust_trans', CustTransformer(**d_preproc))])
+    
     ### NE PAS OUBLIER DE METTRE TOUTES LES AUTRES ETAPES SI NECESSAIRE !!!!!
 
     if type_reg == 'ridge':
@@ -1170,19 +1174,24 @@ def plot_compute_reg_path(scv, type_reg, alphas=np.logspace(-7,7,20)):
     for a in alphas:
         pipe_ = Pipeline([('preproc', preproc_pipe),
                         ('reg', reg.set_params(alpha=a, fit_intercept=False))])
-        pipe_.fit(dict_scv_params['X'], dict_scv_params['y'])
+        pipe_.fit(X, y)
         fitted_reg = pipe_.named_steps['reg']
         coefs.append(fitted_reg.coef_)
 
+    print(len(alphas), len(coefs))
+
     fig, ax = plt.subplots()
-    # Plotting the regularization path
+    ## Plotting the regularization path (HOW CAN I MAKE THE CYCLER WORK ?)
+    # default_cycler = (cycler(color=['r', 'g', 'b', 'y']) +
+    #               cycler(linestyle=['-', '--', ':', '-.']))
+    # with plt.rc_context(rc = {'axes.prop_cycle': default_cycler}):
+        # ax.plot(alphas, coefs)
     ax.plot(alphas, coefs)
     # Plotting a line for the best alpha
     best_alpha = [v for k,v in scv.best_params_.items() if k.endswith('__alpha')][0]
     ax.vlines(best_alpha, np.min(np.ravel(coefs)), np.max(np.ravel(coefs)))
     # Getting the names of the transformed columns
-    step_ct = scv.best_estimator_.\
-                            named_steps['preproc'].named_steps['cust_trans']
+    step_ct = pipe_.named_steps['preproc'].named_steps['cust_trans']
     col_names = step_ct.get_feature_names()
 
     ax.set_xscale('log')
@@ -1193,7 +1202,6 @@ def plot_compute_reg_path(scv, type_reg, alphas=np.logspace(-7,7,20)):
     plt.axis('tight')
     fig.set_size_inches(12,6)
     plt.show()
-
 
 '''calculates VIF and exclude colinear columns'''
 
