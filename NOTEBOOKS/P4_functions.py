@@ -385,11 +385,11 @@ def scree_plot(col_names, exp_var_rat, ylim=(0,0.4)):
     plt.title('Scree plot', fontweight='bold')
 
 
-# Returing main regressor scores
-#MAE, MSE, RMSE, R2, expl_var, Adj_R2, MAPE, MSPE
+''' computes the scores from true values, predicted values
+and returns the result in a pd.Series'''
 
-def scores_reg(name, X, y, ypr, exclude=['Adj_R2']):
-
+def scores_reg(name_reg, y, ypr, X=None, scoring_test=None, exclude=['Adj_R2']):
+  
     MAE = metrics.mean_absolute_error(y, ypr)
     MSE = metrics.mean_squared_error(y, ypr)
     RMSE = np.sqrt(MSE)
@@ -401,61 +401,31 @@ def scores_reg(name, X, y, ypr, exclude=['Adj_R2']):
     MSPE = 100*np.mean(np.square((y-ypr)/y+1e-10))
     expl_var = metrics.explained_variance_score(y, ypr)
 
-    dict_metrics = {'MAE': MAE, 'MSE': MSE, 'RMSE': RMSE,
+    scoring_test_res = {'MAE': MAE, 'MSE': MSE, 'RMSE': RMSE,
                     'R2': R2, 'expl_var': expl_var, 'Adj_R2': Adj_R2,
                     'MAPE': MAPE, 'MSPE': MSPE}
-    
-    li_n_metrics = [n for n in dict_metrics.keys() if n not in exclude]
-    li_metrics = [dict_metrics[n] for n in li_n_metrics]
-    ser = pd.Series(li_metrics, index = li_n_metrics, name=name)
+
+    li_n_metrics = [n for n in scoring_test_res.keys() if n not in exclude]
+    li_metrics = [scoring_test_res[n] for n in li_n_metrics]
+    ser = pd.Series(li_metrics, index = li_n_metrics, name=name_reg)
 
     return ser
 
-# Computing the Adjusted R2 score
+''' Computes predictions using a given model,
+and then computes and returns the given scores
+# 2 | score of the model with best params on a given test set'''
 
-from sklearn.model_selection import cross_validate
-
-# def calc_adj_R2(R2, n, p):
-#     # n = yte.shape[0] # n: nb of observations
-#     # p = Xte.shape[1] # p: nb of indep features
-#     return 1-(1-R2)*(n-1)/(n-p-1)
-
-
-# Returning mean regressor scores with cross-validation
-### AMELIORER PEUT-ETRE POUR INCLURE DE MEILLEURES METRIQUES ?
-### FONCTION EXLCUDE ?
-
-def cv_scores_reg(name, pipe, X, y, cv=5, adj_r2=False):
-    res = pd.Series()
-    cv_scoring = ['neg_root_mean_squared_error', 'r2']
-
-    cv_scores = cross_validate(pipe, X, y, scoring=cv_scoring,                       
-                               cv=cv, return_train_score=True, verbose=1)
-    n = y.shape[0]/cv # n: nb of observations
-    p = X.shape[1] # p: nb of indep features
-    Adj_R2 = (1-(1-cv_scores['test_r2'])*(n-1)/(n-p-1)).mean()
-    if adj_r2:
-        res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'].mean(),
-	                     'mean_CV_te_R2': cv_scores['test_r2'].mean(),
-	                     'mean_CV_te_adjR2': Adj_R2},
-                         name = name)
-    else:
-        res = pd.Series({'mean_CV_te_RMSE': -cv_scores['test_neg_root_mean_squared_error'],
-	                     'mean_CV_te_R2': cv_scores['test_r2']}, name = name)
-    return res
-
-
-## computes the test score from fitted model and appends to current dataframe or create a new one
-
-def get_append_scores(name_reg, pipe, Xte, yte, df_res=None, cv=6):
-    if df_res is None:
-        df_res = pd.DataFrame(dtype = 'object')
-    df_res_mod = pd.DataFrame(dtype = 'object')
-    ypr = pipe.predict(Xte)
-    ser = scores_reg(name_reg, Xte, yte, ypr).astype('object')
-    ser = ser.append(cv_scores_reg(name_reg, pipe, Xte, yte, cv=cv).astype('object'))
-    df_res_mod = pd.concat([df_res,ser.to_frame()],1)
-    return df_res_mod
+def compute_test_scores(name_reg, model, X, y, scoring_test=None, exclude=['Adj_R2']):
+    
+    df_res = pd.DataFrame(dtype = 'object')
+    if scoring_test is None:  # default scores
+        ypr = model.predict(X)
+        ser = scores_reg(name_reg, y, ypr, X, scoring_test, exclude).astype('object')
+    else: # attention un score fait avec make_scorer prend en entrée (estimator, X, y), et pas (yte, ypr)
+        li_metrics = [scoring_test[n](model, X, y) for n in scoring_test.keys()]
+        ser = pd.Series(li_metrics, index = scoring_test.keys(), name=name_reg)
+    df_res = df_res.append(ser.to_frame())
+    return df_res
 
 ''' Builds a customizable column_transformer which parameters can be optimized in a GridSearchCV
 CATEGORICAL : three differents startegies for 3 different types of
@@ -777,9 +747,9 @@ def run_optimization(name_reg, reg, param_grid, file_name, dict_models, pipe, di
         dict_models[name_reg] = \
             model_optimizer(name_reg, reg, param_grid, pipe, **dict_scv_params, cv_search=cv_search,
                             search_strat=search_strat, n_iter=n_iter)
-        with open(file_name, "wb") as f:
-            dill.dump(dict_models, f)
-        print("-----...model dumped")
+    with open(file_name, "wb") as f:
+        dill.dump(dict_models, f)
+    print("-----...model dumped")
     
     new_df_res = scv_perf_fetcher(name_reg, dict_models[name_reg])
     return pd.concat([df_res, new_df_res], axis=1)
@@ -796,39 +766,21 @@ def get_best_model_transf_df(scv, X, y):
                             index =X.index)
     return X_enc
 
-# Gets various scores related to a model coming from gridsearch cv or randomizedSearchcv
+''' 1 | fetches best hyperparams and scores obtained
+during searchCV (training, testing)'''
 
-def scv_perf_fetcher(name_reg, scv,
-                     cv_results=True,
-                     Xte=None, yte=None,
-                     test_set=False,  exclude=['Adj_R2'],
-                     cross_val=False, cv_test=6):
+def scv_perf_fetcher(name_reg, scv):
     
     df_res = pd.DataFrame(dtype = 'object')
-    # 1 | best hyperparams and scores obtained during searchCV (training, testing)
-    if cv_results:
-        df_best_res = pd.DataFrame(scv.cv_results_).loc[scv.best_index_].astype('object')
-        df_res.at['best_params', name_reg] = str(df_best_res['params'])
-        li_index = df_best_res.index[df_best_res.index.str.startswith(('mean_', 'std_'))]
-        li_index = move_cat_containing(li_index, ['train', 'test', 'score', 'fit'])
-        for i in li_index:
-            df_res.at[i, name_reg] = df_best_res[i]
-
-    # 2 | score of the model with best params on test set (optional)
-    if test_set:
-        ypr = scv.best_estimator_.predict(Xte)
-        res = scores_reg(name_reg, Xte, yte, ypr,
-                        exclude=['Adj_R2']).astype('object')
-        df_res = df_res.append(res.to_frame())
-
-    # 3 | mean cv score of the model with best params on test set (optional)
-    if cross_val:
-        res = cv_scores_reg(name_reg, scv.best_estimator_,
-                            Xte, yte, cv=cv_test).astype('object')
-        df_res = df_res.append(res.to_frame())
+    df_best_res = pd.DataFrame(scv.cv_results_).loc[scv.best_index_].astype('object')
+    df_res.at['best_params', name_reg] = str(df_best_res['params'])
+    li_index = df_best_res.index[df_best_res.index.str.startswith(('mean_', 'std_'))]
+    li_index = move_cat_containing(li_index, ['train', 'test', 'score', 'fit'])
+    for i in li_index:
+        df_res.at[i, name_reg] = df_best_res[i]
 
     return df_res
-
+    
 ## When searching for 2 best hyperparameters with gscv : plotting a heatmap of mean_test_score(cv)
 ## the score displayed for each cell is the one for the best other parameters.
 
@@ -923,8 +875,8 @@ def plot_learning_curve(name_reg, estimator, X, y, ylim=None, cv=None,
     axes[0].set_xlabel("Training examples")
     axes[0].set_ylabel(score_name)
     
-    cust_leg = [Line2D([0], [0], color='k', ls = 'solid', lw=2),
-                Line2D([0], [0], color='k', ls = 'dashed', lw=2)]
+    cust_leg = [Line2D([0], [0], color='k', ls = 'dashed', lw=2),
+                Line2D([0], [0], color='k', ls = 'solid', lw=2)]
     axes[0].legend(cust_leg, ['Train (CV)', 'Test (CV)'],loc="best")
 
     # Plot n_samples vs fit_times
