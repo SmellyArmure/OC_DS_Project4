@@ -1160,7 +1160,7 @@ from matplotlib.rcsetup import cycler
 def plot_compute_reg_path(d_preproc, X, y, type_reg, alphas=np.logspace(-7,7,20)):
 
     preproc_pipe = Pipeline([('cust_trans', CustTransformer(**d_preproc))])
-    
+   
     ### NE PAS OUBLIER DE METTRE TOUTES LES AUTRES ETAPES SI NECESSAIRE !!!!!
 
     if type_reg == 'ridge':
@@ -1187,9 +1187,9 @@ def plot_compute_reg_path(d_preproc, X, y, type_reg, alphas=np.logspace(-7,7,20)
     # with plt.rc_context(rc = {'axes.prop_cycle': default_cycler}):
         # ax.plot(alphas, coefs)
     ax.plot(alphas, coefs)
-    # Plotting a line for the best alpha
-    best_alpha = [v for k,v in scv.best_params_.items() if k.endswith('__alpha')][0]
-    ax.vlines(best_alpha, np.min(np.ravel(coefs)), np.max(np.ravel(coefs)))
+    # # Plotting a line for the best alpha PEUT ETRE REMETTRE UN GS ICI ?
+    # best_alpha = ???????
+    # ax.vlines(best_alpha, np.min(np.ravel(coefs)), np.max(np.ravel(coefs)))
     # Getting the names of the transformed columns
     step_ct = pipe_.named_steps['preproc'].named_steps['cust_trans']
     col_names = step_ct.get_feature_names()
