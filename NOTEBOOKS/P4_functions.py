@@ -65,24 +65,31 @@ def plot_export_missing(df, cols, n_file, title,
 
 # Plotting histograms of specified quantitative continuous columns of a dataframe and mean, median and mode values.
 
-def plot_histograms(df, cols, file_name=None, figsize=(12,7), layout=(3,3), save_enabled=False):
+import scipy.stats as st
+
+def plot_histograms(df, cols, file_name=None, bins=30, figsize=(12,7), skip_outliers=True, thresh=3, layout=(3,3), save_enabled=False):
 
     fig = plt.figure(figsize=figsize)
 
     for i, c in enumerate(cols,1):
         ax = fig.add_subplot(*layout,i)
-        ax.hist(df[c],  bins=30, color='grey')
+        if skip_outliers:
+            ser = df[c][np.abs(st.zscore(df[c]))<thresh]
+        else:
+            ser = df[c]
+        ax.hist(ser,  bins=bins, color='grey')
         ax.set_title(c)
         ax.vlines(df[c].mean(), *ax.get_ylim(),  color='red', ls='-', lw=1.5)
         ax.vlines(df[c].median(), *ax.get_ylim(), color='green', ls='-.', lw=1.5)
         ax.vlines(df[c].mode()[0], *ax.get_ylim(), color='goldenrod', ls='--', lw=1.5)
         ax.legend(['mean', 'median', 'mode'])
         ax.title.set_fontweight('bold')
+        # xmin, xmax = ax.get_xlim()
+        # ax.set(xlim=(0, xmax/5))
         
     plt.tight_layout(w_pad=0.5, h_pad=0.65)
 
-    if save_enabled: plt.savefig(os.getcwd()+'/FIG/'+file_name,
-                                dpi=400);
+    if save_enabled: plt.savefig(os.getcwd()+'/FIG/'+file_name, dpi=400);
     plt.show()
 
 # normality tests
@@ -934,9 +941,9 @@ from sklearn.model_selection import learning_curve
 #     fig.set_facecolor('w')
 #     return fig
 
+
 ''' Plots the training and test scores obtained during the SearchCV (either Randomized or Grid)
 the other parameters are parameters of the best estimator (found by gridsearch)'''
-
 
 
 def plot_scv_multi_scores(name_reg, scv, param, title = None, x_log=False, loc='best', figsize = (12, 4)):
