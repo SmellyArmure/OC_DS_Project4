@@ -373,22 +373,22 @@ def plot_heatmap(corr, title, figsize=(8,4), vmin=-1, vmax=1, center=0,
 
 # Plotting explained variance ratio in scree plot
 
-def scree_plot(col_names, exp_var_rat, ylim=(0,0.4)):
+def scree_plot(col_names, exp_var_rat, ylim=(0, 0.4), figsize=(8, 3)):
     plt.bar(x=col_names, height=exp_var_rat, color='grey')
     ax1 = plt.gca()
     ax1.set(ylim=ylim)
     ax2 = ax1.twinx()
     ax2.plot(exp_var_rat.cumsum(), 'ro-')
-    ax2.set(ylim=(0,1.1))
+    ax2.set(ylim=(0, 1.1))
     ax1.set_ylabel('explained var. rat.')
     ax2.set_ylabel('cumulative explained var. rat.')
 
     for i, p in enumerate(ax1.patches):
-        ax1.text( p.get_width()/5 + p.get_x(), p.get_height()+ p.get_y()+0.01,
-                '{:.0f}%'.format(exp_var_rat[i]*100),
-                    fontsize=8, color='k')
-        
-    plt.gcf().set_size_inches(8,3)
+        ax1.text(p.get_width() / 5 + p.get_x(), p.get_height() + p.get_y() + 0.01,
+                 '{:.0f}%'.format(exp_var_rat[i] * 100),
+                 fontsize=8, color='k')
+
+    plt.gcf().set_size_inches(figsize)
     plt.title('Scree plot', fontweight='bold')
 
 
@@ -909,6 +909,7 @@ def plot_learning_curve(name_reg, estimator, X, y, ylim=None, cv=None,
     axes[2].set_xlabel("fit_times")
     axes[2].set_ylabel(score_name)
     axes[2].set_title("Performance of the model")
+    if ylim is not None: axes[2].set_ylim(*ylim)
     axes[2].legend(loc=2, prop={'size': 10})# bbox_to_anchor = (0.2,1.1), ncol=4
 
     plt.gcf().set_facecolor('w')
@@ -1133,8 +1134,8 @@ def plot_perm_importance(model, name_reg, X, y, scoring='r2',
 
 '''Plotting the feature importance of a model'''
 
-def plot_model_feat_imp(name_reg, model):
-    
+
+def plot_model_feat_imp(name_reg, model, figsize=(15, 3)):
     # Getting the names of the transformed columns
     step_ct = model.named_steps['preproc'].named_steps['cust_trans']
     col_names = step_ct.get_feature_names()
@@ -1146,13 +1147,13 @@ def plot_model_feat_imp(name_reg, model):
         col_coefs = step_reg.feature_importances_
     else:
         print("ERROR: This regressor has no 'coef_' or 'feature_importances_' attribute")
-
-    ser = pd.Series(col_coefs, index = col_names)
+    nb_feat = col_coefs.size
+    ser = pd.Series(col_coefs, index=col_names[:nb_feat])
 
     fig, ax = plt.subplots()
     ser.sort_values(ascending=False).plot.bar(color='red');
-    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right" )
-    fig.set_size_inches(15,3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+    fig.set_size_inches(figsize)
     plt.show()
 
 
@@ -1164,15 +1165,15 @@ The parameters for encoding of the features must be passed.
 from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from matplotlib.rcsetup import cycler
 
-def plot_compute_reg_path(d_preproc, X, y, type_reg, alphas=np.logspace(-7,7,20)):
-
+def plot_compute_reg_path(d_preproc, X, y, type_reg, best_alpha, alphas=np.logspace(-7, 7, 20),
+                          fit_intercept=False, figsize=(12, 6)):
     preproc_pipe = Pipeline([('cust_trans', CustTransformer(**d_preproc))])
-   
+
     ### NE PAS OUBLIER DE METTRE TOUTES LES AUTRES ETAPES SI NECESSAIRE !!!!!
 
     if type_reg == 'ridge':
         reg = Ridge()
-    elif type_reg =='lasso':
+    elif type_reg == 'lasso':
         reg = Lasso()
     elif type_reg == 'enet':
         reg = ElasticNet()
@@ -1180,7 +1181,7 @@ def plot_compute_reg_path(d_preproc, X, y, type_reg, alphas=np.logspace(-7,7,20)
     coefs = []
     for a in alphas:
         pipe_ = Pipeline([('preproc', preproc_pipe),
-                        ('reg', reg.set_params(alpha=a, fit_intercept=False))])
+                          ('reg', reg.set_params(alpha=a, fit_intercept=fit_intercept))])
         pipe_.fit(X, y)
         fitted_reg = pipe_.named_steps['reg']
         coefs.append(fitted_reg.coef_)
@@ -1192,23 +1193,61 @@ def plot_compute_reg_path(d_preproc, X, y, type_reg, alphas=np.logspace(-7,7,20)
     # default_cycler = (cycler(color=['r', 'g', 'b', 'y']) +
     #               cycler(linestyle=['-', '--', ':', '-.']))
     # with plt.rc_context(rc = {'axes.prop_cycle': default_cycler}):
-        # ax.plot(alphas, coefs)
     ax.plot(alphas, coefs)
     # # Plotting a line for the best alpha PEUT ETRE REMETTRE UN GS ICI ?
-    # best_alpha = ???????
-    # ax.vlines(best_alpha, np.min(np.ravel(coefs)), np.max(np.ravel(coefs)))
+    ax.vlines(best_alpha, np.min(np.ravel(coefs)), np.max(np.ravel(coefs)))
     # Getting the names of the transformed columns
     step_ct = pipe_.named_steps['preproc'].named_steps['cust_trans']
     col_names = step_ct.get_feature_names()
 
     ax.set_xscale('log')
     ax.set_xlim(ax.get_xlim()[::-1])  # reverse axis
-    ax.legend(labels=col_names, ncol=2, bbox_to_anchor=[1,1])
+    ax.legend(labels=col_names, ncol=2, bbox_to_anchor=[1, 1])
     plt.xlabel('alpha'), plt.ylabel('weights')
-    plt.title(type_reg.title()+' coefficients as a function of the regularization')
+    plt.title(type_reg.title() + ' coefficients as a function of the regularization')
     plt.axis('tight')
-    fig.set_size_inches(12,6)
+    fig.set_size_inches(figsize)
     plt.show()
+
+
+''' Plots a bar plot of the train and test scores (multiscoring with gridsearch)
+of different models. One graph per score. Color is customizable
+df_ contains all the lines of the df_res, coming from all the cv_results_
+gathered in a big dataframe, and the columns correpsondinng to the models 
+to compare'''
+
+def plot_compare_scores(df_, title=None, metrics_names=['mae','mpse','pred_rate_10', 'r2', 'rmse'],
+                        li_colors=['b', 'r', 'g', 'purple', 'orange'],
+                        locations = [1,4,4,4,1], print_values = False):
+
+    fig, axs = plt.subplots(1,len(metrics_names))
+    if locations is None: locations = ['best']*len(metrics_names)
+    for ax, m_n, c, loc in zip(axs, metrics_names, li_colors, locations):
+        ser_test = df_.loc[['mean_test_'+m_n, 'mean_test_'+m_n+'_log'],:].max(0)
+        ser_train = df_.loc[['mean_train_'+m_n, 'mean_train_'+m_n+'_log'],:].max(0)
+        p = np.arange(0, ser_test.shape[0] , 1) #len(metrics_names)
+        w = 0.4
+        ax.bar(p, ser_train, width=w, color=c ,alpha = 0.5, label='train')
+        ax.bar(p+w, ser_test, width=w, color=c , label='test')
+        ax.set_ylabel(m_n)
+        ax.set_xticks(p+w/2);
+        ax.set_xticklabels(ser_train.index)
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right" )
+        if print_values :
+            for i, p in enumerate(ax.patches):
+                ax.text(p.get_width() / 5 + p.get_x(), p.get_height() + p.get_y() + 0.01,
+                            '{:.3f}'.format(ser_train.append(ser_test).iloc[i]),
+                        rotation=90, fontsize=8, fontweight='bold', color='k')
+        ax.legend(loc=loc)
+        ax.grid()
+    if title is not None:
+        fig.suptitle(title, fontsize=16, fontweight='bold')
+        fig.tight_layout(rect=[0,0,1,0.92])
+    else:
+        fig.tight_layout()
+    fig.set_size_inches(16,4)
+    fig.tight_layout(rect=[0,0,1,0.92])
+
 
 '''calculates VIF and exclude colinear columns'''
 
