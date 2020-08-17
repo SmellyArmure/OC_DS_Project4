@@ -395,44 +395,26 @@ def scree_plot(col_names, exp_var_rat, ylim=(0, 0.4), figsize=(8, 3)):
 ''' computes the scores from true values, predicted values
 and returns the result in a pd.Series'''
 
-def scores_reg(name_reg, y, ypr, X=None, scoring_test=None, exclude=['Adj_R2']):
-  
-    MAE = metrics.mean_absolute_error(y, ypr)
-    MSE = metrics.mean_squared_error(y, ypr)
-    RMSE = np.sqrt(MSE)
-    R2 = metrics.r2_score(y, ypr)
-    n = y.shape[0] # nb of observations
-    p = X.shape[1] # nb of indep features
-    Adj_R2 = 1-(1-R2)*(n-1)/(n-p-1)
-    MAPE = 100*np.mean(np.abs((y-ypr)/(y+1e-10)))
-    MSPE = 100*np.mean(np.square((y-ypr)/y+1e-10))
-    expl_var = metrics.explained_variance_score(y, ypr)
+def scores_reg(name_reg, model, X, y, log_on=False):
+    if not log_on :
+        scoring_test_res = {'mae': mae(model, X, y),
+                            'rmse': rmse(model, X, y),
+                            'mpse': rmse(model, X, y),
+                            'r2': r2(model, X, y),
+                            'pred_rate_10': pred_rate_10(model, X, y)}
+    else:
+        scoring_test_res = {'mae': mae_log(model, X, y),
+                            'rmse': rmse_log(model, X, y),
+                            'mpse': mpse_log(model, X, y),
+                            'r2': r2_log(model, X, y),
+                            'pred_rate_10': pred_rate_10_log(model, X, y)}
 
-    scoring_test_res = {'MAE': MAE, 'MSE': MSE, 'RMSE': RMSE,
-                    'R2': R2, 'expl_var': expl_var, 'Adj_R2': Adj_R2,
-                    'MAPE': MAPE, 'MSPE': MSPE}
 
-    li_n_metrics = [n for n in scoring_test_res.keys() if n not in exclude]
-    li_metrics = [scoring_test_res[n] for n in li_n_metrics]
+    li_metrics = [v for k, v in scoring_test_res.items()]
+    li_n_metrics = [k for k, v in scoring_test_res.items()]
     ser = pd.Series(li_metrics, index = li_n_metrics, name=name_reg)
 
     return ser
-
-''' Computes predictions using a given model,
-and then computes and returns the given scores
-# 2 | score of the model with best params on a given test set'''
-
-def compute_test_scores(name_reg, model, X, y, scoring_test=None, exclude=['Adj_R2']):
-    
-    df_res = pd.DataFrame(dtype = 'object')
-    if scoring_test is None:  # default scores
-        ypr = model.predict(X)
-        ser = scores_reg(name_reg, y, ypr, X, scoring_test, exclude).astype('object')
-    else: # attention un score fait avec make_scorer prend en entrée (estimator, X, y), et pas (yte, ypr)
-        li_metrics = [scoring_test[n](model, X, y) for n in scoring_test.keys()]
-        ser = pd.Series(li_metrics, index = scoring_test.keys(), name=name_reg)
-    df_res = df_res.append(ser.to_frame())
-    return df_res
 
 ''' Builds a customizable column_transformer which parameters can be optimized in a GridSearchCV
 CATEGORICAL : three differents startegies for 3 different types of
@@ -1106,7 +1088,7 @@ def plot_hyperparam_tuning(gs, grid_params, params=None, score='score',
 from sklearn.inspection import permutation_importance
 
 def plot_perm_importance(model, name_reg, X, y, scoring='r2',
-                         dict_perm_imp=None, file_name=None):
+                         dict_perm_imp=None, file_name=None, figsize=(12,3)):
 
     # If model with the same name already in dict_models, just takes existing model
     if dict_perm_imp.get(name_reg, np.nan) is not np.nan:
@@ -1127,11 +1109,10 @@ def plot_perm_importance(model, name_reg, X, y, scoring='r2',
     fig, ax = plt.subplots()
     ser.sort_values(ascending=False).plot.bar(color='grey');
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right" )
-    fig.set_size_inches(12,3)
+    fig.set_size_inches(figsize)
     plt.show()
 
     return dict_perm_imp
-
 '''Plotting the feature importance of a model'''
 
 
@@ -1155,7 +1136,6 @@ def plot_model_feat_imp(name_reg, model, figsize=(15, 3)):
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
     fig.set_size_inches(figsize)
     plt.show()
-
 
 ''' Computing and plotting the regularisation path of a ridge, lasso or elasticnet model.
 The parameters for encoding of the features must be passed.
@@ -1210,6 +1190,49 @@ def plot_compute_reg_path(d_preproc, X, y, type_reg, best_alpha, alphas=np.logsp
     plt.show()
 
 
+''' computes the scores from true values, predicted values
+and returns the result in a pd.Series'''
+
+
+def scores_reg_old(name_reg, y, ypr, X=None, scoring_test=None, exclude=['Adj_R2']):
+    MAE = metrics.mean_absolute_error(y, ypr)
+    MSE = metrics.mean_squared_error(y, ypr)
+    RMSE = np.sqrt(MSE)
+    R2 = metrics.r2_score(y, ypr)
+    n = y.shape[0]  # nb of observations
+    p = X.shape[1]  # nb of indep features
+    Adj_R2 = 1 - (1 - R2) * (n - 1) / (n - p - 1)
+    MAPE = 100 * np.mean(np.abs((y - ypr) / (y + 1e-10)))
+    MSPE = 100 * np.mean(np.square((y - ypr) / y + 1e-10))
+    expl_var = metrics.explained_variance_score(y, ypr)
+
+    scoring_test_res = {'MAE': MAE, 'MSE': MSE, 'RMSE': RMSE,
+                        'R2': R2, 'expl_var': expl_var, 'Adj_R2': Adj_R2,
+                        'MAPE': MAPE, 'MSPE': MSPE}
+
+    li_n_metrics = [n for n in scoring_test_res.keys() if n not in exclude]
+    li_metrics = [scoring_test_res[n] for n in li_n_metrics]
+    ser = pd.Series(li_metrics, index=li_n_metrics, name=name_reg)
+
+    return ser
+
+''' Computes predictions using a given model,
+and then computes and returns the given scores
+# 2 | score of the model with best params on a given test set'''
+
+
+def compute_test_scores(name_reg, model, X, y, scoring_test=None, exclude=['Adj_R2']):
+    df_res = pd.DataFrame(dtype='object')
+    if scoring_test is None:  # default scores
+        ypr = model.predict(X)
+        ser = scores_reg_old(name_reg, y, ypr, X, scoring_test, exclude).astype('object')
+    else:  # attention un score fait avec make_scorer prend en entrée (estimator, X, y), et pas (yte, ypr)
+        li_metrics = [scoring_test[n](model, X, y) for n in scoring_test.keys()]
+        ser = pd.Series(li_metrics, index=scoring_test.keys(), name=name_reg)
+    df_res = df_res.append(ser.to_frame())
+    return df_res
+
+
 ''' Plots a bar plot of the train and test scores (multiscoring with gridsearch)
 of different models. One graph per score. Color is customizable
 df_ contains all the lines of the df_res, coming from all the cv_results_
@@ -1218,8 +1241,9 @@ to compare'''
 
 def plot_compare_scores(df_, title=None, metrics_names=['mae','mpse','pred_rate_10', 'r2', 'rmse'],
                         li_colors=['b', 'r', 'g', 'purple', 'orange'],
-                        locations = [1,4,4,4,1], print_values = False):
-
+                        locations = [1,4,4,4,1], print_values = False,
+                        figsize= (16,4)):
+    df_tr, df_te = pd.DataFrame(), pd.DataFrame()
     fig, axs = plt.subplots(1,len(metrics_names))
     if locations is None: locations = ['best']*len(metrics_names)
     for ax, m_n, c, loc in zip(axs, metrics_names, li_colors, locations):
@@ -1233,6 +1257,8 @@ def plot_compare_scores(df_, title=None, metrics_names=['mae','mpse','pred_rate_
         ax.set_xticks(p+w/2);
         ax.set_xticklabels(ser_train.index)
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right" )
+        df_tr = pd.concat([df_tr, ser_train.to_frame()], axis=1)
+        df_te = pd.concat([df_te, ser_test.to_frame()], axis=1)
         if print_values :
             for i, p in enumerate(ax.patches):
                 ax.text(p.get_width() / 5 + p.get_x(), p.get_height() + p.get_y() + 0.01,
@@ -1242,11 +1268,14 @@ def plot_compare_scores(df_, title=None, metrics_names=['mae','mpse','pred_rate_
         ax.grid()
     if title is not None:
         fig.suptitle(title, fontsize=16, fontweight='bold')
-        fig.tight_layout(rect=[0,0,1,0.92])
-    else:
-        fig.tight_layout()
-    fig.set_size_inches(16,4)
-    fig.tight_layout(rect=[0,0,1,0.92])
+        # fig.tight_layout(rect=[0,0,1,0.92])
+    # else:
+    #     fig.tight_layout()
+    fig.set_size_inches(figsize)
+    fig.subplots_adjust(wspace=0.4, hspace=0.4)
+    df_tr.columns = metrics_names
+    df_te.columns = metrics_names
+    return df_tr, df_te
 
 
 '''calculates VIF and exclude colinear columns'''

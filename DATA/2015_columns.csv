@@ -1,0 +1,48 @@
+0   OSEBuildingID                                                  3340 non-null   int64  
+ 1   DataYear                                                       3340 non-null   int64  
+ 2   BuildingType                                                   3340 non-null   object 
+ 3   PrimaryPropertyType                                            3340 non-null   object 
+ 4   PropertyName                                                   3340 non-null   object 
+ 5   TaxParcelIdentificationNumber                                  3338 non-null   object 
+ 6   Location                                                       3340 non-null   object 
+ 7   CouncilDistrictCode                                            3340 non-null   int64  
+ 8   Neighborhood                                                   3340 non-null   object 
+ 9   YearBuilt                                                      3340 non-null   int64  
+ 10  NumberofBuildings                                              3340 non-null   int64  
+ 11  NumberofFloors                                                 3332 non-null   float64
+ 12  PropertyGFATotal                                               3340 non-null   int64  
+ 13  PropertyGFAParking                                             3340 non-null   int64  
+ 14  PropertyGFABuilding(s)                                         3340 non-null   int64  
+ 15  ListOfAllPropertyUseTypes                                      3213 non-null   object 
+ 16  LargestPropertyUseType                                         3204 non-null   object 
+ 17  LargestPropertyUseTypeGFA                                      3204 non-null   float64
+ 18  SecondLargestPropertyUseType                                   1559 non-null   object 
+ 19  SecondLargestPropertyUseTypeGFA                                1559 non-null   float64
+ 20  ThirdLargestPropertyUseType                                    560 non-null    object 
+ 21  ThirdLargestPropertyUseTypeGFA                                 560 non-null    float64
+ 22  YearsENERGYSTARCertified                                       110 non-null    object 
+ 23  ENERGYSTARScore                                                2560 non-null   float64
+ 24  SiteEUI(kBtu/sf)                                               3330 non-null   float64
+ 25  SiteEUIWN(kBtu/sf)                                             3330 non-null   float64
+ 26  SourceEUI(kBtu/sf)                                             3330 non-null   float64
+ 27  SourceEUIWN(kBtu/sf)                                           3330 non-null   float64
+ 28  SiteEnergyUse(kBtu)                                            3330 non-null   float64
+ 29  SiteEnergyUseWN(kBtu)                                          3330 non-null   float64
+ 30  SteamUse(kBtu)                                                 3330 non-null   float64
+ 31  Electricity(kWh)                                               3330 non-null   float64
+ 32  Electricity(kBtu)                                              3330 non-null   float64
+ 33  NaturalGas(therms)                                             3330 non-null   float64
+ 34  NaturalGas(kBtu)                                               3330 non-null   float64
+ 35  OtherFuelUse(kBtu)                                             3330 non-null   float64
+ 36  GHGEmissions(MetricTonsCO2e)                                   3330 non-null   float64
+ 37  GHGEmissionsIntensity(kgCO2e/ft2)                              3330 non-null   float64
+ 38  DefaultData                                                    3339 non-null   object 
+ 39  Comment                                                        13 non-null     object 
+ 40  ComplianceStatus                                               3340 non-null   object 
+ 41  Outlier                                                        84 non-null     object 
+ 42  2010 Census Tracts                                             224 non-null    float64
+ 43  Seattle Police Department Micro Community Policing Plan Areas  3338 non-null   float64
+ 44  City Council Districts                                         213 non-null    float64
+ 45  SPD Beats                                                      3338 non-null   float64
+ 46  Zip Codes                                                      3340 non-null   int64  
+dtypes: float64(23), int64(9), object(15)
